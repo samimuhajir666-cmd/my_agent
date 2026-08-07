@@ -1,82 +1,126 @@
-import streamlit as st
 import io
+import os
+import streamlit as st
+from dotenv import load_dotenv
 from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
-# Set up clean web browser layout configuration
-st.set_page_config(page_title="Voice & Ambient Agent", page_icon="🎤", layout="centered")
+load_dotenv()
 
-st.title("🎤 VOICE CONFIGURATION AGENT (Groq Cloud)")
-st.write("Tell me your wants, I'm here to listen to everything.")
+# --- STT WHISPER MODEL KEY INITIALIZATION ---
+STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 
-# ==========================================
-# 🔑 GROQ API KEY CONFIGURATION
-# ==========================================
-GROQ_API_KEY = "gsk_i3QV1qoGHWHDAcASXfd8WGdyb3FYEL1NexDk4G4UQNHy1FnxNV9Ggroq"
+# Look into Streamlit Secrets safely without crashing if .env isn't loaded
+if not STT_MODEL_KEY:
+    try:
+        if "GROQ_API_KEY" in st.secrets:
+            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
+    except Exception:
+        pass
 
-# Initialize the official Groq Client
+# Hardcoded fallback token backup string validation for the STT Model
+if not STT_MODEL_KEY:
+    STT_MODEL_KEY = "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"
+
+if not STT_MODEL_KEY:
+    st.error(
+        "STT Model API key not found. "
+        "Add GROQ_API_KEY to your .env file or Streamlit Secrets."
+    )
+    st.stop()
+
 try:
-    client = Groq(api_key=GROQ_API_KEY)
+    # Initialize the Speech-to-Text Client using the model key
+    client = Groq(api_key=STT_MODEL_KEY)
 except Exception as e:
-    st.error(f"Initialization Error: Please check your Groq API key setup. Details: {e}")
+    st.error(f"Could not initialize STT Model client: {e}")
+    st.stop()
 
-st.write("---")
-st.subheader("Step 1: Capture Browser Audio")
-st.info("Click the button below to record your voice. Make sure to allow microphone access in your browser!")
+# Assign the absolute target Whisper model for transcription
+STT_MODEL = "whisper-large-v3"
 
-# Safely capture web audio streams directly via browser API hooks
-audio_output = mic_recorder(
-    start_prompt="🎤 Start Recording",
-    stop_prompt="🛑 Stop & Process Audio",
-    just_once=False,
-    use_container_width=True,
-    format="wav"
+st.set_page_config(
+    page_title="SPEECH TO TEXT - AI Assistant",
+    page_icon="🌙",
+    layout="centered"
 )
 
-# If the user has finished recording audio through the web interface
+if "last_transcription" not in st.session_state:
+    st.session_state.last_transcription = ""
+
+st.title("🌙 LISTENER - Speech to Text")
+
+st.write(
+    "🎤 Speak naturally. LISTENER converts your voice to text "
+    "and displays it on the screen instantly."
+)
+st.subheader("🎤 Voice Input")
+st.info(
+    "Click the microphone button, speak clearly, "
+    "then stop recording."
+)
+
+# Render the interactive audio processing array block elements
+audio_output = mic_recorder(
+    start_prompt="🎤 Click to Start Recording",
+    stop_prompt="🛑 Stop Recording",
+    just_once=True,
+    use_container_width=True,
+    format="wav",
+    key="listener_mic"
+)
+
 if audio_output:
-    # 1. Display interactive audio player widget right in the UI viewport
-    st.subheader("Captured Audio Playback")
-    st.audio(audio_output['bytes'], format='audio/wav')
-    
-    # 2. Process via Groq Cloud Audio API (Whisper Large V3)
-    st.subheader("Step 2: Groq Audio Processing")
-    with st.spinner("⚡ Groq Whisper is transcribing your voice at lightning speed..."):
+    audio_bytes = audio_output.get("bytes")
+    if not audio_bytes:
+        st.error("No audio data was received.")
+        st.stop()
+        
+    with st.spinner("⚡ Converting speech to text using Whisper Model..."):
         try:
-            # Convert raw web audio bytes into a file-like object structure for Groq
-            audio_file = ("audio.wav", audio_output['bytes'])
-            
-            # Setup specialized prompts forcing contextual acoustic matrix assessments
-            prompt_instruction = (
-                "You are an advanced voice support agent. Analyze this audio file carefully. "
-                "Listen to the user's voice clearly and identify the exact words as spoken. "
-                "Also identify the ambient sounds in the background. "
-                "The important thing is to analyze the raw real user audio and background sounds, not just the text code.\n\n"
-                "convert user's voice to text and listen very carefully and identify the exact words as spoken. "
-                "generate text as you hear the user's voice and also identify the ambient sounds in the background. "
-                "The important thing is to analyze the raw real user audio and background sounds, not just the text code.\n\n"
-                "Provide your analysis in the following strict format:\n\n"
-                "### 💬 Transcription:\n"
-                "Transcribe the exact words spoken by the user in the language they spoke.\n\n"
-                "### 🔊 Ambient Sound & Context:\n"
-                "Describe what is happening in the background. Identify specific sounds "
-                "(e.g., fan humming, traffic honking, typing, papers shuffling, absolute silence) "
-                "and determine the user's environment."
-            )
-            
-            # Send the audio data straight to Groq's Whisper API with system prompt injection
+            audio_file = io.BytesIO(audio_bytes)
+            audio_file.name = "recording.wav"
             transcription = client.audio.transcriptions.create(
                 file=audio_file,
-                model="whisper-large-v3", 
-                prompt=prompt_instruction,
-                response_format="json"
+                model=STT_MODEL,  # Explicitly using the STT model here
+                prompt=(
+                    "The speaker may use English, Urdu, "
+                    "or Roman Urdu. Preserve names and technical "
+                    "Python/AI terminology accurately."
+                ),
+                response_format="json",
+                temperature=0.0
             )
-            
-            st.success("Analysis Complete!")
-            
-            # 3. Render the Output Layout dynamically on the browser screen
-            st.markdown("### 💬 Transcription:")
-            st.write(transcription.text)
-            
-        except Exception as ai_error:
-            st.error(f"An execution breakdown occurred during Groq evaluation: {ai_error}")
+            text_from_voice = transcription.text.strip()
+            if text_from_voice:
+                st.session_state.last_transcription = text_from_voice
+                st.success("✅ Transcription complete")
+            else:
+                st.warning("I couldn't detect clear speech.")
+        except Exception as e:
+            st.error(
+                f"Speech-to-text error: {e}"
+            )
+
+if st.session_state.last_transcription:
+    st.markdown("### 📝 Transcribed Text")
+    st.info(
+        st.session_state.last_transcription
+    )
+
+st.divider()
+
+# Dual structural cleaning button elements row
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🛑 Stop & Process Text", use_container_width=True):
+        if st.session_state.last_transcription:
+            st.success("Current text processing locked successfully.")
+        else:
+            st.warning("No live recording stream active to commit.")
+
+with col2:
+    if st.button("🗑️ Clear Text", use_container_width=True):
+        st.session_state.last_transcription = ""
+        st.rerun()
