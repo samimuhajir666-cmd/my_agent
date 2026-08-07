@@ -1,29 +1,28 @@
 import streamlit as st
 import io
-from openai import OpenAI
+from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
 # Set up clean web browser layout configuration
-st.set_page_config(page_title="OpenAI Voice Agent", page_icon="🎤", layout="centered")
+st.set_page_config(page_title="Voice & Ambient Agent", page_icon="🎤", layout="centered")
 
-st.title("🎤 VOICE CONFIGURATION AGENT (OpenAI)")
+st.title("🎤 VOICE CONFIGURATION AGENT (Groq Cloud)")
 st.write("Tell me your wants, I'm here to listen to everything.")
 
 # ==========================================
-# 🔑 OPENAI API KEY CONFIGURATION
+# 🔑 GROQ API KEY CONFIGURATION
 # ==========================================
-# Sami bhai, your OpenAI key is securely placed here now
-OPENAI_API_KEY = "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"
+GROQ_API_KEY = "gsk_i3QV1qoGHWHDAcASXfd8WGdyb3FYEL1NexDk4G4UQNHy1FnxNV9Ggroq"
 
-# Initialize the official OpenAI Client
+# Initialize the official Groq Client
 try:
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = Groq(api_key=GROQ_API_KEY)
 except Exception as e:
-    st.error(f"Initialization Error: Please check your OpenAI API key setup. Details: {e}")
+    st.error(f"Initialization Error: Please check your Groq API key setup. Details: {e}")
 
 st.write("---")
 st.subheader("Step 1: Capture Browser Audio")
-st.info("Click the button below to record your voice. ")
+st.info("Click the button below to record your voice. Make sure to allow microphone access in your browser!")
 
 # Safely capture web audio streams directly via browser API hooks
 audio_output = mic_recorder(
@@ -40,32 +39,44 @@ if audio_output:
     st.subheader("Captured Audio Playback")
     st.audio(audio_output['bytes'], format='audio/wav')
     
-    # 2. Process via OpenAI Whisper API
-    st.subheader("Step 2: OpenAI Audio Processing")
-    with st.spinner("🧠 OpenAI Whisper is transcribing your voice..."):
+    # 2. Process via Groq Cloud Audio API (Whisper Large V3)
+    st.subheader("Step 2: Groq Audio Processing")
+    with st.spinner("⚡ Groq Whisper is transcribing your voice at lightning speed..."):
         try:
-            # Convert raw web audio bytes directly into an in-memory binary stream structure
-            audio_buffer = io.BytesIO(audio_output['bytes'])
-            # Whisper expects a proper filename extension to detect the container type
-            audio_buffer.name = "audio.wav"
+            # Convert raw web audio bytes into a file-like object structure for Groq
+            audio_file = ("audio.wav", audio_output['bytes'])
             
-            # Send the audio stream to OpenAI Whisper for Transcription
-            # We add a custom prompt to guide Whisper on how to handle the audio style
-            transcript_response = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_buffer,
-                prompt="The user might be speaking in English or Urdu mixed with English. Capture exact words."
+            # Setup specialized prompts forcing contextual acoustic matrix assessments
+            prompt_instruction = (
+                "You are an advanced voice support agent. Analyze this audio file carefully. "
+                "Listen to the user's voice clearly and identify the exact words as spoken. "
+                "Also identify the ambient sounds in the background. "
+                "The important thing is to analyze the raw real user audio and background sounds, not just the text code.\n\n"
+                "convert user's voice to text and listen very carefully and identify the exact words as spoken. "
+                "generate text as you hear the user's voice and also identify the ambient sounds in the background. "
+                "The important thing is to analyze the raw real user audio and background sounds, not just the text code.\n\n"
+                "Provide your analysis in the following strict format:\n\n"
+                "### 💬 Transcription:\n"
+                "Transcribe the exact words spoken by the user in the language they spoke.\n\n"
+                "### 🔊 Ambient Sound & Context:\n"
+                "Describe what is happening in the background. Identify specific sounds "
+                "(e.g., fan humming, traffic honking, typing, papers shuffling, absolute silence) "
+                "and determine the user's environment."
+            )
+            
+            # Send the audio data straight to Groq's Whisper API with system prompt injection
+            transcription = client.audio.transcriptions.create(
+                file=audio_file,
+                model="whisper-large-v3", 
+                prompt=prompt_instruction,
+                response_format="json"
             )
             
             st.success("Analysis Complete!")
             
-            # 3. Render the Output Layout
+            # 3. Render the Output Layout dynamically on the browser screen
             st.markdown("### 💬 Transcription:")
-            st.write(transcript_response.text)
-            
-            st.markdown("### 🔊 Ambient Note:")
-            st.caption("Note: OpenAI Whisper focuses heavily on isolating human speech and automatically cleans out background ambient noises like fans or traffic.")
+            st.write(transcription.text)
             
         except Exception as ai_error:
-            st.error(f"An execution breakdown occurred during OpenAI evaluation: {ai_error}")
-            
+            st.error(f"An execution breakdown occurred during Groq evaluation: {ai_error}")
