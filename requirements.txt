@@ -6,5 +6,3 @@ langchain-core
 gTTS
 streamlit-mic-recorder
 python-dotenv
-groq
-streamlit-mic-recorder
