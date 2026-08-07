@@ -1,8 +1,7 @@
+groq
 streamlit
 streamlit-lottie
-requests
-langchain-openai
-langchain-core
-gTTS
 streamlit-mic-recorder
+requests
 python-dotenv
+gTTS
