@@ -1,6 +1,6 @@
 import streamlit as st
 import io
-from google import genai
+import openai
 from streamlit_mic_recorder import mic_recorder
 
 # Set up clean web browser layout configuration
