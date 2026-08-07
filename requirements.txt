@@ -1,0 +1,8 @@
+streamlit
+streamlit-lottie
+requests
+langchain-openai
+langchain-core
+gTTS
+streamlit-mic-recorder
+python-dotenv
