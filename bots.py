@@ -23,7 +23,7 @@ except Exception as e:
 
 st.write("---")
 st.subheader("Step 1: Capture Browser Audio")
-st.info("Click the button below to record your voice. Make sure to allow microphone access in your browser!")
+st.info("Click the button below to record your voice. ")
 
 # Safely capture web audio streams directly via browser API hooks
 audio_output = mic_recorder(
