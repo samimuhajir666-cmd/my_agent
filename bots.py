@@ -3,22 +3,13 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
-from st_audiorec import st_audiorec
+from streamlit_mic_recorder import mic_recorder
 
-# --- 1. CONFIGURATION (MUST BE THE ABSOLUTE FIRST STREAMLIT COMMAND) ---
-st.set_page_config(
-    page_title="SPEECH TO TEXT - AI Assistant",
-    page_icon="🌙",
-    layout="centered"
-)
-
-# --- 2. LOAD ENVIRONMENT VARIABLES ---
 load_dotenv()
 
-# Look into your .env file or hosting environment variables first
+# --- STT MODEL KEY INITIALIZATION ---
 STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 
-# Look into Streamlit/Hosting Secrets safely without crashing if .env isn't loaded
 if not STT_MODEL_KEY:
     try:
         if "GROQ_API_KEY" in st.secrets:
@@ -26,28 +17,43 @@ if not STT_MODEL_KEY:
     except Exception:
         pass
 
-# Hardcoded fallback token backup string validation (Kept exactly as requested)
 if not STT_MODEL_KEY:
     STT_MODEL_KEY = "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"
 
 if not STT_MODEL_KEY:
-    st.error(
-        "STT Model API key not found. "
-        "Add GROQ_API_KEY to your .env file or platform environment configs."
-    )
+    st.error("GROQ_API_KEY not found in .env or Streamlit Secrets.")
     st.stop()
 
 try:
-    # Initialize the Speech-to-Text Client using the active model key
     client = Groq(api_key=STT_MODEL_KEY)
 except Exception as e:
-    st.error(f"Could not initialize STT Model client: {e}")
+    st.error(f"Could not initialize Groq client: {e}")
     st.stop()
 
-# Optimized low-latency conversational speech engine
+# ==========================================
+# 🎯 MODEL & PROMPT CONFIGURATION (UPDATED)
+# ==========================================
+
+# Model set to fast Groq Whisper Turbo (Whisper V3 ka upgraded fast model)
 STT_MODEL = "whisper-large-v3-turbo"
 
-# --- 3. LOAD EXTERNAL UI FILES SAFELY ---
+# Professional AI Agent System Prompt
+SYSTEM_PROMPT = (
+    "You are an expert AI Speech-to-Text Transcription Agent. "
+    "Your sole task is to accurately transcribe audio into clear, written text. "
+    "The speaker may speak in English, Urdu, or Roman Urdu (Hinglish/Urdish). "
+    "Do not translate unless necessary, maintain proper punctuation, "
+    "and carefully preserve technical terms, programming words (Python, JS, HTML, API, etc.), "
+    "and proper names exactly as pronounced."
+)
+
+st.set_page_config(
+    page_title="SPEECH TO TEXT - AI Assistant",
+    page_icon="🌙",
+    layout="centered"
+)
+
+# --- LOAD HTML & CSS FILES SAFELY ---
 def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -58,73 +64,81 @@ def load_html(file_path="index.html"):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f.read(), unsafe_allow_html=True)
 
-# Load your custom styling structure
 load_css("style.css")
 load_html("index.html")
 
-# --- 4. APP STATE & AUDIOMODULE LOOP ---
+# --- SESSION STATE ---
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
 
 st.subheader("🎤 Voice Input")
 
-# Native component with professional embedded wave visualizers and recording controls
-audio_bytes = st_audiorec()
+# Audio Mic Input
+audio_output = mic_recorder(
+    start_prompt="🎤 Click to Start Recording",
+    stop_prompt="🛑 Stop Recording",
+    just_once=True,
+    use_container_width=True,
+    format="wav",
+    key="listener_mic"
+)
 
-if audio_bytes:
-    with st.spinner("⚡ Processing audio and clearing background noise..."):
+# --- AUDIO PROCESSING LOGIC ---
+if audio_output:
+    audio_bytes = audio_output.get("bytes")
+    if not audio_bytes:
+        st.error("No audio data received.")
+        st.stop()
+        
+    with st.spinner("⚡ Processing speech with Groq AI Agent..."):
         try:
             audio_file = io.BytesIO(audio_bytes)
             audio_file.name = "recording.wav"
             
+            # Transcription Request with updated Model and Agent Prompt
             transcription = client.audio.transcriptions.create(
                 file=audio_file,
                 model=STT_MODEL,
-                prompt=(
-                    "Environment Note: This audio contains background noise, room echo, hums, and microphone crackle. "
-                    "Ignore all background sounds, static hiss, breathing artifacts, and ambient noise completely. "
-                    "Transcribe ONLY the explicit spoken human words. "
-                    "Language Profile: The user speaks fluently in English, Urdu, or mixed Roman Urdu. "
-                    "Do not try to translate or fix the vocabulary—transcribe exactly what was said literally."
-                    "do not ans the what user ask just listen clearly and cinvert user,s voice into text"
-                ),
+                prompt=SYSTEM_PROMPT,  # Professional Agent Prompt
                 response_format="json",
                 temperature=0.0
             )
             
-            text_from_voice = getattr(transcription, 'text', '')
-            if isinstance(text_from_voice, str):
-                text_from_voice = text_from_voice.strip()
-            
+            text_from_voice = transcription.text.strip()
             if text_from_voice:
                 st.session_state.last_transcription = text_from_voice
-                st.success("✅ Transcription complete")
+                st.success("✅ Transcription complete!")
             else:
-                st.warning("I couldn't detect clear speech over the room background noise.")
+                st.warning("Could not detect any speech clearly.")
         except Exception as e:
-            st.error(f"Speech-to-text error: {e}")
+            st.error(f"Transcription error: {e}")
 
-# --- 5. UI OUTPUT RENDER DISPLAY ---
+# --- DISPLAY OUTPUT ---
 if st.session_state.last_transcription:
     st.markdown("### 📝 Transcribed Text")
     st.markdown(
-        f'<div class="output-box">{st.session_state.last_transcription}</div>', 
+        f"""
+        <div class="output-card">
+            <div class="output-title">Result:</div>
+            <div class="output-text">{st.session_state.last_transcription}</div>
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
 st.divider()
 
-# Action Layout Interface Control Row
+# Control Buttons
 col1, col2 = st.columns(2)
 
 with col1:
     if st.button("🛑 Stop & Process Text", use_container_width=True):
         if st.session_state.last_transcription:
-            st.success("Current text processing locked successfully.")
+            st.success("Text saved/locked in session state.")
         else:
-            st.warning("No live recording stream active to commit.")
+            st.warning("No recorded text available.")
 
 with col2:
     if st.button("🗑️ Clear Text", use_container_width=True):
         st.session_state.last_transcription = ""
-        st.experimental_rerun()
+        st.rerun()
