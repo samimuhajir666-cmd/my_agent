@@ -1,10 +1,9 @@
 import io
 import os
-import base64
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
-from streamlit_js_eval import streamlit_js_eval
+from st_audiorec import st_audiorec
 
 # --- 1. CONFIGURATION (MUST BE THE ABSOLUTE FIRST STREAMLIT COMMAND) ---
 st.set_page_config(
@@ -16,8 +15,10 @@ st.set_page_config(
 # --- 2. LOAD ENVIRONMENT VARIABLES ---
 load_dotenv()
 
+# Look into your .env file or hosting environment variables first
 STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 
+# Look into Streamlit/Hosting Secrets safely without crashing if .env isn't loaded
 if not STT_MODEL_KEY:
     try:
         if "GROQ_API_KEY" in st.secrets:
@@ -37,11 +38,13 @@ if not STT_MODEL_KEY:
     st.stop()
 
 try:
+    # Initialize the Speech-to-Text Client using the active model key
     client = Groq(api_key=STT_MODEL_KEY)
 except Exception as e:
     st.error(f"Could not initialize STT Model client: {e}")
     st.stop()
 
+# Optimized low-latency conversational speech engine
 STT_MODEL = "whisper-large-v3-turbo"
 
 # --- 3. LOAD EXTERNAL UI FILES SAFELY ---
@@ -55,110 +58,23 @@ def load_html(file_path="index.html"):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f.read(), unsafe_allow_html=True)
 
+# Load your custom styling structure
 load_css("style.css")
 load_html("index.html")
 
-# --- 4. APP STATE & AUDIO INGESTION ---
+# --- 4. APP STATE & AUDIOMODULE LOOP ---
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
 
 st.subheader("🎤 Voice Input")
 
-# Pure JavaScript Recorder that returns data to Python safely via streamlit_js_eval
-js_recorder_code = """
-(async () => {
-    if (!window.myRecorderState) {
-        window.myRecorderState = { isRecording: false, mediaRecorder: null, chunks: [], audioBase64: null };
-    }
+# Native component with professional embedded wave visualizers and recording controls
+audio_bytes = st_audiorec()
 
-    // Create container wrapper if it doesn't exist
-    let wrapper = document.getElementById('custom-recorder-root');
-    if (!wrapper) {
-        wrapper = document.createElement('div');
-        wrapper.id = 'custom-recorder-root';
-        wrapper.className = 'recorder-wrapper';
-        
-        let btn = document.createElement('button');
-        btn.id = 'jsRecordBtn';
-        btn.className = 'mic-button-element';
-        btn.innerText = '🎤 Click to Start Recording';
-        
-        let wave = document.createElement('div');
-        wave.id = 'jsWaveContainer';
-        wave.className = 'audio-wave-container';
-        wave.style.display = 'none';
-        for(let i=0; i<5; i++) {
-            let bar = document.createElement('div');
-            bar.className = 'wave-bar';
-            wave.appendChild(bar);
-        }
-        
-        wrapper.appendChild(btn);
-        wrapper.appendChild(wave);
-        
-        // Find Streamlit's element container to attach cleanly
-        let target = document.querySelector('.stMarkdown') || document.body;
-        target.appendChild(wrapper);
-        
-        btn.addEventListener('click', async () => {
-            let state = window.myRecorderState;
-            if (!state.isRecording) {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                state.mediaRecorder = new MediaRecorder(stream);
-                state.chunks = [];
-                
-                state.mediaRecorder.ondataavailable = e => state.chunks.push(e.data);
-                state.mediaRecorder.onstop = () => {
-                    const blob = new Blob(state.chunks, { type: 'audio/wav' });
-                    const reader = new FileReader();
-                    reader.readAsDataURL(blob);
-                    reader.onloadend = () => {
-                        state.audioBase64 = reader.result.split(',')[1];
-                        // Force a click on a hidden layout tracker to send data back
-                        btn.setAttribute('data-output', state.audioBase64);
-                    };
-                };
-                
-                state.mediaRecorder.start();
-                state.isRecording = true;
-                btn.innerText = "🛑 Stop Recording";
-                btn.classList.add('recording-active');
-                wave.style.display = 'flex';
-            } else {
-                state.mediaRecorder.stop();
-                state.mediaRecorder.stream.getTracks().forEach(t => t.stop());
-                state.isRecording = false;
-                btn.innerText = "🎤 Click to Start Recording";
-                btn.classList.remove('recording-active');
-                wave.style.display = 'none';
-            }
-        });
-    }
-
-    // Polling mechanism to return data to Streamlit runtime variable smoothly
-    return new Promise((resolve) => {
-        let checkInterval = setInterval(() => {
-            let btn = document.getElementById('jsRecordBtn');
-            if (btn && btn.getAttribute('data-output')) {
-                let data = btn.getAttribute('data-output');
-                btn.removeAttribute('data-output');
-                clearInterval(checkInterval);
-                resolve(data);
-            }
-        }, 500);
-    });
-})()
-"""
-
-# Safely capture the return string directly from the browser window instance
-audio_data_base64 = streamlit_js_eval(js_expressions=js_recorder_code, key="browser_audio_bridge")
-
-# Process data immediately if a secure string is received from JavaScript
-if audio_data_base64 and isinstance(audio_data_base64, str):
+if audio_bytes:
     with st.spinner("⚡ Processing audio and clearing background noise..."):
         try:
-            raw_audio_bytes = base64.b64decode(audio_data_base64)
-            audio_file = io.BytesIO(raw_audio_bytes)
+            audio_file = io.BytesIO(audio_bytes)
             audio_file.name = "recording.wav"
             
             transcription = client.audio.transcriptions.create(
@@ -170,6 +86,7 @@ if audio_data_base64 and isinstance(audio_data_base64, str):
                     "Transcribe ONLY the explicit spoken human words. "
                     "Language Profile: The user speaks fluently in English, Urdu, or mixed Roman Urdu. "
                     "Do not try to translate or fix the vocabulary—transcribe exactly what was said literally."
+                    "do not ans the what user ask just listen clearly and cinvert user,s voice into text"
                 ),
                 response_format="json",
                 temperature=0.0
@@ -197,6 +114,7 @@ if st.session_state.last_transcription:
 
 st.divider()
 
+# Action Layout Interface Control Row
 col1, col2 = st.columns(2)
 
 with col1:
