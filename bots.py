@@ -37,15 +37,12 @@ except Exception as e:
 # Model set to fast Groq Whisper Turbo (Whisper V3 ka upgraded fast model)
 STT_MODEL = "whisper-large-v3-turbo"
 
-# --- CHANGED HERE: Updated Prompt to strictly force English/Roman characters & block Hindi script ---
+# --- CHANGED HERE: Enforced strict Roman script rules without translation ---
 SYSTEM_PROMPT = (
-    "You are an expert AI Speech-to-Text Transcription Agent. "
-    "Your sole task is to accurately transcribe audio into clear, written text using ONLY English / Latin alphabets. "
-    "DO NOT use Devanagari or Hindi script under any circumstances. "
-    "The speaker may speak in English, Urdu, or Roman Urdu (Hinglish/Urdish). "
-    "If the speaker speaks Urdu, transcribe it in Roman Urdu (Latin script). "
-    "Maintain proper punctuation, and carefully preserve technical terms, programming words "
-    "(Python, JS, HTML, API, etc.), and proper names exactly as pronounced."
+    "Listen carefully to the audio and write down EXACTLY what you hear using ONLY Roman/English letters. "
+    "Do NOT translate the language. If spoken in Urdu, write it strictly in Roman Urdu (e.g., 'kya haal hai', 'main theek hoon'). "
+    "Do NOT use Hindi/Devanagari script or Urdu Arabic script under any circumstances. "
+    "Always output text strictly in the English alphabet (Roman script)."
 )
 
 st.set_page_config(
@@ -101,7 +98,7 @@ if audio_output:
                 file=audio_file,
                 model=STT_MODEL,
                 prompt=SYSTEM_PROMPT,  # Professional Agent Prompt
-                language="en",  # <--- CHANGED HERE: Enforces English/Latin alphabet output, prevents Devanagari (Hindi) auto-detection
+                # CHANGED HERE: Removed language="ur" / language="en" so Whisper doesn't force translation
                 response_format="json",
                 temperature=0.0
             )
