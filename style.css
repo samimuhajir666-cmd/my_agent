@@ -1,0 +1,63 @@
+/* Page Background & Overall Theme */
+.stApp {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%) !important;
+    color: #f8fafc !important;
+    font-family: 'Inter', sans-serif;
+}
+
+/* Title / Header Styling */
+.main-header {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.main-header h1 {
+    color: #38bdf8;
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.main-header p {
+    color: #94a3b8;
+    font-size: 0.95rem;
+    margin-top: 6px;
+}
+
+/* Streamlit Buttons Styling (Start, Stop, Clear buttons) */
+div.stButton > button {
+    background: linear-gradient(90deg, #1e293b 0%, #334155 100%) !important;
+    color: #f8fafc !important;
+    border: 1px solid #475569 !important;
+    border-radius: 10px !important;
+    padding: 12px 20px !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+}
+
+div.stButton > button:hover {
+    background: #38bdf8 !important;
+    color: #0f172a !important;
+    border-color: #38bdf8 !important;
+    box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+}
+
+/* Transcribed Output Box Styling */
+.output-box {
+    background: rgba(30, 41, 59, 0.8);
+    border-left: 4px solid #38bdf8;
+    border-radius: 10px;
+    padding: 18px;
+    font-size: 1.1rem;
+    color: #f1f5f9;
+    margin-top: 10px;
+}
+
+/* Hide Default Streamlit Menus for Clean Look */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
