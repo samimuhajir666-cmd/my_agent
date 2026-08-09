@@ -1,30 +1,76 @@
-/* Header alignment styling */
-.app-header-container {
-    text-align: left;
-    margin-bottom: 2rem;
-    font-family: 'Source Sans Pro', sans-serif;
+/* Dark Theme & Background */
+.stApp {
+    background: linear-gradient(135deg, #0b0f19 0%, #111827 100%) !important;
+    color: #f3f4f6 !important;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
-.logo-title-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+/* Main Header Design */
+.main-header {
+    background: rgba(31, 41, 55, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    margin-bottom: 25px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 }
 
-.app-emoji {
-    font-size: 2rem;
-}
-
-.app-main-title {
+.main-header h1 {
+    color: #38bdf8;
     font-size: 2.2rem;
     font-weight: 700;
-    color: #ffffff;
     margin: 0;
 }
 
-.app-subtitle {
-    font-size: 1rem;
-    color: #a3a8b4;
-    margin-top: 5px;
-    margin-bottom: 0;
+.main-header p {
+    color: #9ca3af;
+    font-size: 0.95rem;
+    margin-top: 6px;
 }
+
+/* Transcribed Text Output Card */
+.output-card {
+    background: #1e293b;
+    border-left: 5px solid #38bdf8;
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 15px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.output-title {
+    color: #38bdf8;
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.output-text {
+    color: #f8fafc;
+    font-size: 1.15rem;
+    line-height: 1.6;
+    word-wrap: break-word;
+}
+
+/* Customizing Streamlit Buttons */
+div.stButton > button {
+    background: #1e293b !important;
+    color: #f8fafc !important;
+    border: 1px solid #334155 !important;
+    border-radius: 10px !important;
+    padding: 10px 20px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease-in-out !important;
+}
+
+div.stButton > button:hover {
+    background: #38bdf8 !important;
+    color: #0f172a !important;
+    border-color: #38bdf8 !important;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.4) !important;
+}
+
+/* Hide Default Streamlit Menus */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
