@@ -8,4 +8,4 @@ gTTS
 streamlit>=1.30.0
 groq>=0.4.0
 python-dotenv>=1.0.0
-streamlit-js-eval>=0.1.7
+streamlit-audiorec>=0.0.4
