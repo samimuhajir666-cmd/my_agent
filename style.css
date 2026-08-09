@@ -1,11 +1,30 @@
-/* Custom styled wrapper box for your transcription text display */
-.output-box {
-    padding: 15px;
-    border-radius: 8px;
-    background-color: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    font-size: 16px;
-    line-height: 1.6;
-    margin-top: 10px;
+/* Header alignment styling */
+.app-header-container {
+    text-align: left;
+    margin-bottom: 2rem;
+    font-family: 'Source Sans Pro', sans-serif;
+}
+
+.logo-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.app-emoji {
+    font-size: 2rem;
+}
+
+.app-main-title {
+    font-size: 2.2rem;
+    font-weight: 700;
     color: #ffffff;
+    margin: 0;
+}
+
+.app-subtitle {
+    font-size: 1rem;
+    color: #a3a8b4;
+    margin-top: 5px;
+    margin-bottom: 0;
 }
