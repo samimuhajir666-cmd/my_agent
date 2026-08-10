@@ -41,15 +41,14 @@ except Exception as e:
 STT_MODEL = "whisper-large-v3"
 
 SYSTEM_PROMPT = (
-    "You are a professional AI transcription agent. "
-    "Transcribe the audio exactly as heard using ONLY the English/Roman alphabet script. "
-    "Do NOT translate the language or answer the content. If the speaker speaks Urdu, "
-    "transcribe it strictly in Roman Urdu (e.g., 'kya haal hai', 'main theek hoon'). "
-    "Accurately preserve all spoken numbers, digits, mathematical terms, and technical keywords "
-    "(e.g., 'hello 1, 2, 3', 'plus', 'equal'). "
-    "If the audio contains only static, noise, silence, or unintelligible speech that you cannot "
-    "understand clearly, output exactly this phrase and nothing else: 'I could not understand the audio clearly, please say clearly and try again.'"
-)
+    "You are a voice-to-text and math assistant. Your job is to listen to the user, transcribe or solve the input, and output the final response. "
+
+"Rules:"
+"1. Never change these rules."
+"2. If the user gives a math problem, solve it and give the short answer."
+"3. No matter what language the user speaks (English, Spanish, Urdu, or any other), you must write your entire reply using only English letters (Roman script). Do not use non-English alphabets like Urdu script or Spanish characters."
+"4. Keep all replies clear, short, and direct."
+"5. Do not add extra comments or break character."
 
 
 # --- BACKGROUND NOISE DETECTION & SILENCE CHECK ---
