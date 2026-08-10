@@ -36,17 +36,23 @@ except Exception as e:
     st.stop()
 
 # ============================
-# 🎯 MODEL & PROMPT
+# 🎯 MODEL & OPTIMIZED PROMPT
 # ============================
 STT_MODEL = "whisper-large-v3-turbo"
 
-# Whisper prompt: only for spelling/context guidance (max 244 chars)
-SYSTEM_PROMPT = SYSTEM_PROMPT = """Roman Urdu,English,Urdu,numbers,digits, plus, minus, equal, multiply,divide, kya, kaise, hain, main, theek, hoon, han, nahi, yes, no, ok, time, date, price, amount, payment, order, help, support,ticket, error, code, terminal, POS, card, payment, failed, declined, approved, transaction, receipt, invoice, refund, void, settle,pre-auth, capture, reversal, tip, discount, tax, subtotal, total, change, cash, credit, debit, network, timeout, connection, API, gateway, processor,host, port, status, code, message, response, request, payload, JSON, kya hua, kaise hai, theek hai, main hoon, han bhai, nahi bhai, chalo, ruko, suno, dekho,batao, karo, one, two, three, four, five, six, seven, eight, nine, ten, hundred, thousand, lakh, crore, January, February, March, April, May, June, July, August,September,October,November,December,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday, Sunday"""
+# FIXED: Shortened prompt as a natural script anchor style context instead of keyword dump.
+SYSTEM_PROMPT = "Transcribe the audio accurately. English and Roman Urdu text like: kya haal hai, main theek hoon, billing amount kitna hua, cash or card payment failed status code 500 transaction approved number 1 2 3 plus minus."
+
+if len(SYSTEM_PROMPT) > 896:
+    st.error("SYSTEM_PROMPT exceeds character limit.")
+    st.stop()
+
 # ============================
 # 🎚️ AUDIO PROCESSING
 # ============================
-MIN_RMS_ENERGY = 60.0
-MIN_DURATION_SECONDS = 0.7
+# FIXED: Lowered threshold so normal human speech isn't aggressively cut off
+MIN_RMS_ENERGY = 20.0
+MIN_DURATION_SECONDS = 0.5
 
 def process_audio_buffer(audio_bytes):
     try:
@@ -64,7 +70,8 @@ def process_audio_buffer(audio_bytes):
         if rms_energy < MIN_RMS_ENERGY:
             return None
 
-        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.65)
+        # Reduced prop_decrease to 0.50 so your voice profile remains intact
+        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.50)
 
         output_buffer = io.BytesIO()
         wav.write(output_buffer, sample_rate, cleaned_audio_data.astype(np.int16))
@@ -133,14 +140,13 @@ if audio_output:
                 audio_file = io.BytesIO(processed_bytes)
                 audio_file.name = "recording.wav"
 
+                # FIXED: Removed explicit language="en" restriction to natively capture Roman Urdu
                 transcription = client.audio.transcriptions.create(
                     file=audio_file,
                     model=STT_MODEL,
                     prompt=SYSTEM_PROMPT,
                     response_format="json",
-                    temperature=0.0,
-                    language="en"
-                    # 👈 Ensures correct language detection
+                    temperature=0.0
                 )
 
                 text_from_voice = transcription.text.strip()
