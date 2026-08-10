@@ -41,8 +41,10 @@ STT_MODEL = "whisper-large-v3-turbo"
 SYSTEM_PROMPT = (
     "Listen carefully to the audio and write down EXACTLY what you hear using ONLY Roman/English letters. "
     "Do NOT translate the language. If spoken in Urdu, write it strictly in Roman Urdu (e.g., 'kya haal hai', 'main theek hoon'). "
-    "Do NOT use Hindi/Devanagari script or Urdu Arabic script under any circumstances. "
     "Always output text strictly in the English alphabet (Roman script)."
+    "understand user,s math if user say hello 1 ,2 ,3 or  like that understand well ."
+    "convert speech into text just in in english and roman language  ,"
+    "no metter user say any language you just ans user in roman language"
 )
 
 st.set_page_config(
