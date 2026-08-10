@@ -1,14 +1,12 @@
 import io
 import os
+import numpy as np
+import scipy.io.wavfile as wav
+import noisereduce as nr
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
 from streamlit_mic_recorder import mic_recorder
-
-# --- AUDIO EXTRACTION LIBRARIES FOR NOISE CANCELLATION ---
-import numpy as np
-import scipy.io.wavfile as wav
-import noisereduce as nr
 
 load_dotenv()
 
@@ -36,21 +34,12 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 🎯 MODEL, PROMPT & NOISE CONFIGURATION
+# 🎯 MODEL & CLEAN PROMPT HINT CONFIGURATION
 # ==========================================
-STT_MODEL = "whisper-large-v3"
+STT_MODEL = "whisper-large-v3-turbo"
 
-# --- CHANGED HERE: Clean, strict system prompt with clear Roman script and Math transcription rules ---
-SYSTEM_PROMPT = (
-    "You are a Voice-to-Text Transcription Assistant. "
-    "Your sole task is to accurately transcribe spoken audio into written text. "
-    "Rules: "
-    "1. Always output your transcription using ONLY English letters (Roman script). "
-    "2. Do not use Urdu/Arabic script or non-English alphabets under any circumstances. "
-    "3. If the user speaks math numbers or expressions (e.g., 'two plus two', '1, 2, 3'), generate text after hare clear voicethem clearly in Roman text or digits. "
-    "4. Do not translate the meaning of spoken words; preserve the exact spoken words in Roman script. "
-    "5. Keep the transcription direct, clear, and concise with no added conversational commentary."
-)
+# --- FIXED PROMPT: Sample text only. No rules or instructions to leak into output! ---
+SYSTEM_PROMPT = "Transcribe clearly in Roman Urdu and English: 1 2 3, plus, minus, equal, kya haal hai, main theek hoon."
 
 # --- BACKGROUND NOISE DETECTION & SILENCE CHECK ---
 def process_audio_buffer(audio_bytes):
@@ -64,12 +53,12 @@ def process_audio_buffer(audio_bytes):
         # Calculate Root Mean Square (RMS) loudness to detect silence
         rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64)**2))
         
-        # If the energy level is below 15.0, it means it is pure silence or just minor background hiss
-        if rms_energy < 15.0:
+        # Silence threshold check
+        if rms_energy < 12.0:
             return None  # Signal that the audio is silent
             
-        # Apply Noise Reduction if the audio actually contains speech
-        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.95)
+        # Mild Noise Reduction to prevent sound distortion
+        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.70)
         
         output_buffer = io.BytesIO()
         wav.write(output_buffer, sample_rate, cleaned_audio_data.astype(np.int16))
@@ -91,7 +80,6 @@ def load_css(file_path="style.css"):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# FIXED: Wrapped with flexible structure execution blocks to guarantee safe UI rendering
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -128,7 +116,6 @@ if audio_output:
     with st.spinner("⏳ Analyzing sound levels and filtering noise..."):
         processed_bytes = process_audio_buffer(audio_bytes)
         
-    # If the function returned None, it means the audio was completely silent
     if processed_bytes is None:
         st.warning("⚠️ No speech detected. Please speak into the microphone.")
     else:
@@ -148,19 +135,22 @@ if audio_output:
                 text_from_voice = transcription.text.strip()
                 
                 # Double-check protection against generic Whisper hallucinations
-                hallucination_phrases = ["thanks for watching", "thank you", "subtitles by", "amara.org"]
-                if any(phrase in text_from_voice.lower() for phrase in hallucination_phrases) and len(text_from_voice) < 25:
-                    st.warning("⚠️ No clear speech detected.")
+                hallucination_phrases = [
+                    "thanks for watching", "thank you", "subtitles by", "amara.org",
+                    "transcribe audio", "roman urdu"
+                ]
+                
+                if any(phrase in text_from_voice.lower() for phrase in hallucination_phrases) and len(text_from_voice) < 35:
+                    st.warning("⚠️ No clear speech detected. Please try speaking again.")
                 elif text_from_voice:
                     st.session_state.last_transcription = text_from_voice
                     st.success("✅ Transcription complete!")
                 else:
                     st.warning("Could not detect any speech clearly.")
                     
-            # FIXED: Added server overload safety to catch 500 server errors elegantly without breaking anything
             except Exception as e:
                 if "500" in str(e):
-                    st.error("🚨 Groq Cloud Server is heavily overloaded right now (Error 500). Please wait 5 seconds and click record again.")
+                    st.error("🚨 Groq Cloud Server overloaded (Error 500). Please wait 5 seconds and record again.")
                 else:
                     st.error(f"Transcription error: {e}")
 
