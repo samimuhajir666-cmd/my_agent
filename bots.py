@@ -16,7 +16,7 @@ STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 if not STT_MODEL_KEY:
     try:
         if "GROQ_API_KEY" in st.secrets:
-            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
+            STT_MODEL_KEY = st.secrets["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"]
     except Exception:
         pass
 
