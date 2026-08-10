@@ -10,9 +10,9 @@ from streamlit_mic_recorder import mic_recorder
 
 load_dotenv()
 
-# ==========================================
-# 🔑 STT MODEL KEY INITIALIZATION
-# ==========================================
+# ============================
+# 🔑 API KEY INITIALIZATION
+# ============================
 STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 
 if not STT_MODEL_KEY:
@@ -22,7 +22,6 @@ if not STT_MODEL_KEY:
     except Exception:
         pass
 
-# Fallback Key
 if not STT_MODEL_KEY:
     STT_MODEL_KEY = "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"
 
@@ -36,22 +35,24 @@ except Exception as e:
     st.error(f"Could not initialize Groq client: {e}")
     st.stop()
 
-# ==========================================
-# 🎯 MODEL & ULTRA-CLEAN PROMPT HINT
-# ==========================================
+# ============================
+# 🎯 MODEL & PROMPT
+# ============================
 STT_MODEL = "whisper-large-v3-turbo"
 
-# Pure vocabulary keywords to guide script/spelling (No long sentences to leak!)
-SYSTEM_PROMPT = "Roman Urdu, English, numbers, 1, 2, 3, plus, minus, equal, kya, kaise, hain, main, theek, hoon, yes, no. not generate text in any other language generate in english alphabetic scipts"
-
-if len(SYSTEM_PROMPT) > 896:
-    st.error(f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} characters, exceeds limit.")
-    st.stop()
-
-# --- AUDIO PROCESSING FOR NOISE REDUCTION ---
-MIN_RMS_ENERGY = 20.0       # Reduced threshold so soft voices aren't cut off
-MIN_DURATION_SECONDS = 0.5  # Slightly lower minimum clip length
-
+# Whisper prompt: only for spelling/context guidance (max 244 chars)
+SYSTEM_PROMPT = SYSTEM_PROMPT = """Roman Urdu, English, Urdu, numbers, digits, plus, minus, equal, multiply,
+divide, kya, kaise, hain, main, theek, hoon, han, nahi, yes, no, ok, time, date, price, amount, payment, order, help, support,
+ticket, error, code, terminal, POS, card, payment, failed, declined, approved, transaction, receipt, invoice, refund, void, settle,
+pre-auth, capture, reversal, tip, discount, tax, subtotal, total, change, cash, credit, debit, network, timeout, connection, API, gateway, processor,
+host, port, status, code, message, response, request, payload, JSON, kya hua, kaise hai, theek hai, main hoon, han bhai, nahi bhai, chalo, ruko, suno, dekho,
+batao, karo, one, two, three, four, five, six, seven, eight, nine, ten, hundred, thousand, lakh, crore, January, February, March, April, May, June, July, August,
+September, October, November, December, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday"""
+# ============================
+# 🎚️ AUDIO PROCESSING
+# ============================
+MIN_RMS_ENERGY = 20.0
+MIN_DURATION_SECONDS = 0.5
 
 def process_audio_buffer(audio_bytes):
     try:
@@ -66,12 +67,9 @@ def process_audio_buffer(audio_bytes):
             return None
 
         rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64) ** 2))
-
-        # Silence / background noise check
         if rms_energy < MIN_RMS_ENERGY:
             return None
 
-        # Gentle noise reduction so speech quality isn't distorted
         cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.65)
 
         output_buffer = io.BytesIO()
@@ -82,20 +80,19 @@ def process_audio_buffer(audio_bytes):
     except Exception:
         return audio_bytes
 
-
+# ============================
+# 🖥️ STREAMLIT UI
+# ============================
 st.set_page_config(
-    page_title="SPEECH TO TEXT",
+    page_title="Speech to Text",
     page_icon="🎤",
     layout="centered"
 )
 
-
-# --- LOAD HTML & CSS SAFELY ---
 def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
 
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
@@ -105,11 +102,9 @@ def load_html(file_path="index.html"):
             except Exception:
                 st.markdown(f.read(), unsafe_allow_html=True)
 
-
 load_css("style.css")
 load_html("index.html")
 
-# --- SESSION STATE ---
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
 
@@ -124,7 +119,9 @@ audio_output = mic_recorder(
     key="listener_mic"
 )
 
-# --- AUDIO PROCESSING LOGIC ---
+# ============================
+# 🧠 TRANSCRIPTION LOGIC
+# ============================
 if audio_output:
     audio_bytes = audio_output.get("bytes")
     if not audio_bytes:
@@ -147,12 +144,13 @@ if audio_output:
                     model=STT_MODEL,
                     prompt=SYSTEM_PROMPT,
                     response_format="json",
-                    temperature=0.0
+                    temperature=0.0,
+                    language="en"
+                    # 👈 Ensures correct language detection
                 )
 
                 text_from_voice = transcription.text.strip()
 
-                # Filter out short hallucinated single-word outputs
                 if text_from_voice and len(text_from_voice) > 1:
                     st.session_state.last_transcription = text_from_voice
                     st.success("✅ Complete!")
@@ -162,7 +160,9 @@ if audio_output:
             except Exception as e:
                 st.error(f"Transcription error: {e}")
 
-# --- DISPLAY OUTPUT ---
+# ============================
+# 📝 DISPLAY OUTPUT
+# ============================
 if st.session_state.last_transcription:
     st.markdown("### 📝 Transcribed Text")
     st.markdown(
