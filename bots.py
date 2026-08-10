@@ -23,7 +23,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # If .env doesn't contain the key, try Streamlit Secrets
 if not GROQ_API_KEY:
     try:
-        GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+        GROQ_API_KEY = st.secrets["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"]
     except Exception:
         GROQ_API_KEY = None
 
