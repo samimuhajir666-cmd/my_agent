@@ -89,10 +89,13 @@ def load_css(file_path="style.css"):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
+# --- FIXED: Used st.html instead of st.markdown to render pure layout blocks ---
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
-            st.markdown(f.read(), unsafe_allow_html=True)
+            # Purani line 'st.markdown' ko hata kar ye native line lagayein:
+            st.html(f.read())
+
 
 load_css("style.css")
 load_html("index.html")
