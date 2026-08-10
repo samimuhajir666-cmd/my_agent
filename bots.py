@@ -33,7 +33,7 @@ except Exception as e:
 # ==========================================
 # MODEL & PROMPT CONFIGURATION
 # ==========================================
-STT_MODEL = "whisper-large-v3-turbo"
+STT_MODEL = "=openai/gpt-oss-20b"
 
 # NOTE: Groq/Whisper's "prompt" field is NOT an instruction field.
 # Whisper does not "follow rules" written in the prompt -- it treats the
