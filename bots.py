@@ -45,8 +45,8 @@ SYSTEM_PROMPT = SYSTEM_PROMPT = """Roman Urdu,English,Urdu,numbers,digits, plus,
 # ============================
 # 🎚️ AUDIO PROCESSING
 # ============================
-MIN_RMS_ENERGY = 20.0
-MIN_DURATION_SECONDS = 0.5
+MIN_RMS_ENERGY = 60.0
+MIN_DURATION_SECONDS = 0.7
 
 def process_audio_buffer(audio_bytes):
     try:
