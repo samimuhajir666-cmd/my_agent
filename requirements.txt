@@ -9,3 +9,7 @@ streamlit>=1.30.0
 groq>=0.4.0
 python-dotenv>=1.0.0
 streamlit-audiorec>=0.0.4
+streamlit
+numpy
+scipy
+noisereduce
