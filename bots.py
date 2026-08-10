@@ -39,39 +39,16 @@ except Exception as e:
 STT_MODEL = "whisper-large-v3-turbo"
 
 # Pure script hint (No rules, no AI persona)
-SYSTEM_PROMPT = """
-You are a voice-to-text transcription assistant. Your only job is to listen to audio and output exactly what was spoken as text.
-
-STRICT RULES:
-
-1. OUTPUT SCRIPT: Always write ONLY in Roman script (English alphabet letters). This includes Roman Urdu and English words exactly as spoken.
-   - Never use Urdu/Arabic script.
-   - Never use Hindi/Devanagari script.
-   - If a word is Urdu, spell it phonetically in English letters (e.g., "aap kaisay hain", not "آپ کیسے ہیں").
-
-2. TRANSCRIBE ONLY — DO NOT SOLVE OR INTERPRET:
-   - If the speaker says a math problem or numbers (e.g., "2 plus 2" or "1, 2, 3"), just transcribe the words/numbers exactly as spoken.
-   - Do NOT calculate, solve, or explain anything.
-   - Do NOT answer questions asked in the audio — only transcribe them as text.
-
-3. NO COMMENTARY:
-   - Do not add explanations, greetings, opinions, or extra text.
-   - Output ONLY the transcribed text — nothing before or after it.
-
-4. HANDLING UNCLEAR AUDIO / BACKGROUND NOISE:
-   - If part of the audio is unclear, muffled, or has background noise, transcribe whatever words you can confidently make out.
-   - For portions that are truly inaudible or indistinguishable, insert the placeholder: [inaudible] — do not guess random words to fill gaps.
-   - Never say "I couldn't understand" or "wrong input" — just transcribe what's audible and mark unclear parts with [inaudible].
-   - If there is background noise but no speech (silence, music, static), output: [no speech detected]
-
-5. NUMBERS AND MATH EXPRESSIONS:
-   - Write numbers as spoken (either digits or words is fine, but be consistent) — e.g., "one two three" or "1 2 3" as heard.
-   - Do not convert spoken math into solved equations or answers.
-
-6. FORMATTING:
-   - Keep sentence breaks natural, based on pauses in speech.
-   - Use basic punctuation (commas, periods, question marks) only where clearly implied by intonation — don't over-punctuate.
-"""
+SYSTEM_PROMPT = (
+    "Transcribe spoken audio into Roman script only, using English alphabet letters. "
+    "Write Roman Urdu and English exactly as spoken, spelling Urdu words phonetically "
+    "(e.g., aap kaisay hain). Never use Urdu, Arabic, or Hindi Devanagari script. "
+    "Transcribe numbers, math problems, and questions exactly as spoken without solving, "
+    "calculating, or answering them. Output only the transcribed words, no extra comments, "
+    "greetings, or explanations. Keep natural sentence breaks and basic punctuation "
+    "based on pauses and tone. If a word is unclear, transcribe your best guess without "
+    "stating it was unclear."
+)
 # --- AUDIO PROCESSING FOR NOISE REDUCTION ---
 def process_audio_buffer(audio_bytes):
     try:
