@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
+# --- AUDIO EXTRACTION LIBRARIES FOR NOISE CANCELLATION ---
+import numpy as np
+import scipy.io.wavfile as wav
+import noisereduce as nr
+
 load_dotenv()
 
 # --- STT MODEL KEY INITIALIZATION ---
@@ -31,25 +36,42 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 🎯 MODEL & PROMPT CONFIGURATION (UPDATED)
+# 🎯 MODEL, PROMPT & NOISE CONFIGURATION
 # ==========================================
+STT_MODEL = "whisper-large-v3"
 
-# Model set to fast Groq Whisper Turbo (Whisper V3 ka upgraded fast model)
-STT_MODEL = "whisper-large-v3-turbo"
-
-# --- CHANGED HERE: Enforced strict Roman script rules without translation ---
 SYSTEM_PROMPT = (
-    "Listen carefully to the audio and write down EXACTLY what you hear using ONLY Roman/English letters. "
-    "Do NOT translate the language. If spoken in Urdu, write it strictly in Roman Urdu (e.g., 'kya haal hai', 'main theek hoon'). "
-    "Always output text strictly in the English alphabet (Roman script)."
-    "understand user,s math if user say hello 1 ,2 ,3 or  like that understand well ."
-    "convert speech into text just in in english and roman language  ,"
-    "no metter user say any language you just ans user in roman language"
+    "Transcribe the audio exactly as heard using ONLY the English/Roman alphabet script. "
+    "Do NOT translate or answer. If the speaker speaks Urdu, transcribe it strictly in "
+    "Roman Urdu (e.g., 'kya haal hai', 'main theek hoon'). Accurately preserve all spoken numbers, "
+    "digits, mathematical terms, and technical keywords (e.g., 'hello 1, 2, 3', 'plus', 'equal')."
 )
+
+# --- BACKGROUND NOISE DETECTION ENGINE ---
+def remove_background_noise(audio_bytes):
+    try:
+        audio_file = io.BytesIO(audio_bytes)
+        sample_rate, audio_data = wav.read(audio_file)
+        
+        # Convert stereo channel to mono if necessary
+        if len(audio_data.shape) > 1:
+            audio_data = audio_data.mean(axis=1).astype(audio_data.dtype)
+            
+        # Spectral gating drops ambient background hums, keyboard clicks, and fan noises
+        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.95)
+        
+        output_buffer = io.BytesIO()
+        wav.write(output_buffer, sample_rate, cleaned_audio_data.astype(np.int16))
+        output_buffer.seek(0)
+        
+        return output_buffer.read()
+    except Exception:
+        # Pass raw audio seamlessly if buffer array processing hits any exception frames
+        return audio_bytes
 
 st.set_page_config(
     page_title="SPEECH TO TEXT - AI Assistant",
-    page_icon="🌙",
+    page_icon="👾",
     layout="centered"
 )
 
@@ -73,7 +95,6 @@ if "last_transcription" not in st.session_state:
 
 st.subheader("🎤 Voice Input")
 
-# Audio Mic Input
 audio_output = mic_recorder(
     start_prompt="🎤 Click to Start Recording",
     stop_prompt="🛑 Stop Recording",
@@ -90,17 +111,19 @@ if audio_output:
         st.error("No audio data received.")
         st.stop()
         
+    # 🌟 NEW ADDITION: Cleans up background disruption artifacts before hitting cloud APIs
+    with st.spinner("⏳ Filter out background noise..."):
+        audio_bytes = remove_background_noise(audio_bytes)
+        
     with st.spinner("⚡ Processing speech with Groq AI Agent..."):
         try:
             audio_file = io.BytesIO(audio_bytes)
             audio_file.name = "recording.wav"
             
-            # Transcription Request with updated Model and Agent Prompt
             transcription = client.audio.transcriptions.create(
                 file=audio_file,
                 model=STT_MODEL,
-                prompt=SYSTEM_PROMPT,  # Professional Agent Prompt
-                # CHANGED HERE: Removed language="ur" / language="en" so Whisper doesn't force translation
+                prompt=SYSTEM_PROMPT,
                 response_format="json",
                 temperature=0.0
             )
@@ -129,7 +152,6 @@ if st.session_state.last_transcription:
 
 st.divider()
 
-# Control Buttons
 col1, col2 = st.columns(2)
 
 with col1:
