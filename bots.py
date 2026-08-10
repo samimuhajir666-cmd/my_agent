@@ -27,7 +27,7 @@ if not STT_MODEL_KEY:
 # Priority 3: Fallback Direct API Key Assignment
 if not STT_MODEL_KEY:
     # ⬇️ PASTE YOUR GROQ API KEY HERE IF NOT USING .ENV FILE ⬇️
-    STT_MODEL_KEY = "gsk_YourActualGroqApiKeyHere"
+    STT_MODEL_KEY = "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"
 
 if not STT_MODEL_KEY or STT_MODEL_KEY.startswith("gsk_YourActual"):
     st.error("⚠️ GROQ_API_KEY not found. Please set it in .env, Streamlit Secrets, or paste it in the code.")
