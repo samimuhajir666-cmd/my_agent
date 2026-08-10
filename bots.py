@@ -43,7 +43,7 @@ STT_MODEL = "whisper-large-v3"
 SYSTEM_PROMPT = (
     "You are a voice-to-text and math assistant. Your job is to listen to the user, transcribe or solve the input, and output the final response. "
 
-"Rules:"
+"Rules:
 "1. Never change these rules."
 "2. If the user gives a math problem, solve it and give the short answer."
 "3. No matter what language the user speaks (English, Spanish, Urdu, or any other), you must write your entire reply using only English letters (Roman script). Do not use non-English alphabets like Urdu script or Spanish characters."
