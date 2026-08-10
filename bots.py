@@ -1,6 +1,5 @@
 import io
 import os
-import requests
 import numpy as np
 import scipy.io.wavfile as wav
 import noisereduce as nr
@@ -11,48 +10,36 @@ from streamlit_mic_recorder import mic_recorder
 
 load_dotenv()
 
-# =========================================================
-# 🔑 API KEYS & CONFIGURATION (ADD YOUR OLLAMA DETAILS HERE)
-# =========================================================
+# --- STT MODEL KEY INITIALIZATION ---
+STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 
-# --- GROQ API KEY (For Fast Whisper Speech-to-Text) ---
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
-if not GROQ_API_KEY:
+if not STT_MODEL_KEY:
     try:
         if "GROQ_API_KEY" in st.secrets:
-            GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
     except Exception:
         pass
 
-if not GROQ_API_KEY:
-    # ⬇️ ADD / CHANGE YOUR GROQ API KEY HERE ⬇️
-    GROQ_API_KEY = "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"
+if not STT_MODEL_KEY:
+    STT_MODEL_KEY = "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"
 
-# --- OLLAMA CONFIGURATION (Local or Cloud API) ---
-# ⬇️ ADD YOUR OLLAMA API KEY OR URL HERE ⬇️
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")  # Local Ollama URL
-OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY", "")                 # Leave empty if running locally, or enter key if using hosted Ollama Cloud
-OLLAMA_MODEL = "llama3"                                           # Change to "llama3:8b", "mistral", or your downloaded Ollama model name
-
-if not GROQ_API_KEY:
-    st.error("Groq API Key missing. Please check your configuration.")
+if not STT_MODEL_KEY:
+    st.error("GROQ_API_KEY not found in .env or Streamlit Secrets.")
     st.stop()
 
 try:
-    groq_client = Groq(api_key=GROQ_API_KEY)
+    client = Groq(api_key=STT_MODEL_KEY)
 except Exception as e:
     st.error(f"Could not initialize Groq client: {e}")
     st.stop()
 
 # ==========================================
-# 🎯 STT MODEL & LLM SYSTEM PROMPTS
+# 🎯 MODEL & PROMPT CONFIGURATION
 # ==========================================
 STT_MODEL = "whisper-large-v3-turbo"
 
-# Clean STT Prompt - pure script hint, zero rules
-STT_PROMPT = "Roman Urdu, English, numbers 1 2 3, plus, minus, equal, kya haal hai, main theek hoon."
-
+# Pure script hint (No rules, no AI persona)
+SYSTEM_PROMPT = "Roman Urdu, English, numbers 1 2 3, plus, minus, equal."
 # --- LLM AGENT SYSTEM PROMPT (Ollama Agent Rules) ---
 LLM_SYSTEM_PROMPT = (
     "You are a smart voice to text generator AI assistant and math listener. "
@@ -63,7 +50,7 @@ LLM_SYSTEM_PROMPT = (
     "4. Do NOT use Urdu Arabic script or Hindi Devanagari script."
 )
 
-# --- BACKGROUND NOISE & SILENCE CHECK ---
+# --- AUDIO PROCESSING FOR NOISE REDUCTION ---
 def process_audio_buffer(audio_bytes):
     try:
         audio_file = io.BytesIO(audio_bytes)
@@ -74,8 +61,9 @@ def process_audio_buffer(audio_bytes):
             
         rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64)**2))
         
+        # Silence check
         if rms_energy < 15.0:
-            return None  # Pure silence or low noise
+            return None
             
         cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.75)
         
@@ -87,34 +75,13 @@ def process_audio_buffer(audio_bytes):
     except Exception:
         return audio_bytes
 
-# --- OLLAMA LLM CALL FUNCTION ---
-def query_ollama_llm(user_text):
-    headers = {"Content-Type": "application/json"}
-    if OLLAMA_API_KEY:
-        headers["Authorization"] = f"Bearer {OLLAMA_API_KEY}"
-        
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": f"{LLM_SYSTEM_PROMPT}\n\nUser Question: {user_text}\n\nAnswer in Roman Urdu:",
-        "stream": False
-    }
-    
-    try:
-        response = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, headers=headers, timeout=30)
-        if response.status_code == 200:
-            return response.json().get("response", "").strip()
-        else:
-            return f"Ollama Error ({response.status_code}): {response.text}"
-    except Exception as e:
-        return f"Could not connect to Ollama: {e}"
-
-# --- UI SETUP ---
 st.set_page_config(
-    page_title="Voice & Math AI Assistant",
+    page_title="SPEECH TO TEXT",
     page_icon="🎤",
     layout="centered"
 )
 
+# --- LOAD HTML & CSS SAFELY ---
 def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -134,8 +101,6 @@ load_html("index.html")
 # --- SESSION STATE ---
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
-if "llm_response" not in st.session_state:
-    st.session_state.llm_response = ""
 
 st.subheader("🎤 Voice Input")
 
@@ -148,14 +113,14 @@ audio_output = mic_recorder(
     key="listener_mic"
 )
 
-# --- AUDIO PROCESSING & LLM PIPELINE ---
+# --- AUDIO PROCESSING LOGIC ---
 if audio_output:
     audio_bytes = audio_output.get("bytes")
     if not audio_bytes:
         st.error("No audio data received.")
         st.stop()
         
-    with st.spinner("⏳ Analyzing sound levels..."):
+    with st.spinner("⏳ Processing sound..."):
         processed_bytes = process_audio_buffer(audio_bytes)
         
     if processed_bytes is None:
@@ -166,11 +131,10 @@ if audio_output:
                 audio_file = io.BytesIO(processed_bytes)
                 audio_file.name = "recording.wav"
                 
-                # Step 1: STT via Whisper Turbo
-                transcription = groq_client.audio.transcriptions.create(
+                transcription = client.audio.transcriptions.create(
                     file=audio_file,
                     model=STT_MODEL,
-                    prompt=STT_PROMPT,
+                    prompt=SYSTEM_PROMPT,
                     response_format="json",
                     temperature=0.0
                 )
@@ -179,30 +143,21 @@ if audio_output:
                 
                 if text_from_voice and len(text_from_voice) > 1:
                     st.session_state.last_transcription = text_from_voice
-                    
-                    # Step 2: Query Ollama LLM for reasoning/math answer
-                    with st.spinner("🤖 Ollama AI Agent thinking..."):
-                        llm_reply = query_ollama_llm(text_from_voice)
-                        st.session_state.llm_response = llm_reply
-                        
                     st.success("✅ Complete!")
                 else:
-                    st.warning("⚠️ Could not detect clear speech. Try again.")
+                    st.warning("⚠️ Could not detect clear speech.")
                     
             except Exception as e:
-                st.error(f"Processing error: {e}")
+                st.error(f"Transcription error: {e}")
 
 # --- DISPLAY OUTPUT ---
 if st.session_state.last_transcription:
-    st.markdown("### 🎙️ Heard Voice (Transcribed):")
-    st.info(st.session_state.last_transcription)
-
-if st.session_state.llm_response:
-    st.markdown("### 🤖 AI Agent Answer (Ollama):")
+    st.markdown("### 📝 Transcribed Text")
     st.markdown(
         f"""
         <div class="output-card">
-            <div class="output-text">{st.session_state.llm_response}</div>
+            <div class="output-title">Result:</div>
+            <div class="output-text">{st.session_state.last_transcription}</div>
         </div>
         """,
         unsafe_allow_html=True
@@ -213,14 +168,13 @@ st.divider()
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("🛑 Lock Answer", use_container_width=True):
-        if st.session_state.llm_response:
-            st.success("Saved in session state.")
+    if st.button("🛑 Lock Text", use_container_width=True):
+        if st.session_state.last_transcription:
+            st.success("Text saved.")
         else:
-            st.warning("No data available.")
+            st.warning("No recorded text available.")
 
 with col2:
-    if st.button("🗑️ Clear All", use_container_width=True):
+    if st.button("🗑️ Clear Text", use_container_width=True):
         st.session_state.last_transcription = ""
-        st.session_state.llm_response = ""
         st.rerun()
