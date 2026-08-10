@@ -42,7 +42,7 @@ except Exception as e:
 STT_MODEL = "whisper-large-v3-turbo"
 
 # Pure vocabulary keywords to guide script/spelling (No long sentences to leak!)
-SYSTEM_PROMPT = "Roman Urdu, English, numbers, 1, 2, 3, plus, minus, equal, kya, kaise, hain, main, theek, hoon, yes, no."
+SYSTEM_PROMPT = "Roman Urdu, English, numbers, 1, 2, 3, plus, minus, equal, kya, kaise, hain, main, theek, hoon, yes, no. not generate text in any other language generate in english alphabetic scipts"
 
 if len(SYSTEM_PROMPT) > 896:
     st.error(f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} characters, exceeds limit.")
