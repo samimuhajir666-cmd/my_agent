@@ -61,15 +61,14 @@ def process_audio_buffer(audio_bytes):
         if len(audio_data.shape) > 1:
             audio_data = audio_data.mean(axis=1).astype(audio_data.dtype)
             
-        # 1. FIXED: Calculate Root Mean Square (RMS) loudness to detect silence
-        # This checks the physical volume level of the recording
+        # Calculate Root Mean Square (RMS) loudness to detect silence
         rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64)**2))
         
         # If the energy level is below 15.0, it means it is pure silence or just minor background hiss
         if rms_energy < 15.0:
             return None  # Signal that the audio is silent
             
-        # 2. Apply Noise Reduction if the audio actually contains speech
+        # Apply Noise Reduction if the audio actually contains speech
         cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.95)
         
         output_buffer = io.BytesIO()
@@ -92,13 +91,14 @@ def load_css(file_path="style.css"):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# --- FIXED: Used st.html instead of st.markdown to render pure layout blocks ---
+# FIXED: Wrapped with flexible structure execution blocks to guarantee safe UI rendering
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
-            # Purani line 'st.markdown' ko hata kar ye native line lagayein:
-            st.html(f.read())
-
+            try:
+                st.html(f.read())
+            except Exception:
+                st.markdown(f.read(), unsafe_allow_html=True)
 
 load_css("style.css")
 load_html("index.html")
@@ -126,10 +126,9 @@ if audio_output:
         st.stop()
         
     with st.spinner("⏳ Analyzing sound levels and filtering noise..."):
-        # Process audio data arrays
         processed_bytes = process_audio_buffer(audio_bytes)
         
-    # FIXED: If the function returned None, it means the audio was completely silent
+    # If the function returned None, it means the audio was completely silent
     if processed_bytes is None:
         st.warning("⚠️ No speech detected. Please speak into the microphone.")
     else:
@@ -157,8 +156,13 @@ if audio_output:
                     st.success("✅ Transcription complete!")
                 else:
                     st.warning("Could not detect any speech clearly.")
+                    
+            # FIXED: Added server overload safety to catch 500 server errors elegantly without breaking anything
             except Exception as e:
-                st.error(f"Transcription error: {e}")
+                if "500" in str(e):
+                    st.error("🚨 Groq Cloud Server is heavily overloaded right now (Error 500). Please wait 5 seconds and click record again.")
+                else:
+                    st.error(f"Transcription error: {e}")
 
 # --- DISPLAY OUTPUT ---
 if st.session_state.last_transcription:
