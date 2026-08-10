@@ -47,7 +47,7 @@ SYSTEM_PROMPT = (
     "Rules: "
     "1. Always output your transcription using ONLY English letters (Roman script). "
     "2. Do not use Urdu/Arabic script or non-English alphabets under any circumstances. "
-    "3. If the user speaks math numbers or expressions (e.g., 'two plus two', '1, 2, 3'), write them clearly in Roman text or digits. "
+    "3. If the user speaks math numbers or expressions (e.g., 'two plus two', '1, 2, 3'), generate text after hare clear voicethem clearly in Roman text or digits. "
     "4. Do not translate the meaning of spoken words; preserve the exact spoken words in Roman script. "
     "5. Keep the transcription direct, clear, and concise with no added conversational commentary."
 )
