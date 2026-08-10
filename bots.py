@@ -10,15 +10,21 @@ from streamlit_mic_recorder import mic_recorder
 
 load_dotenv()
 
-# --- STT MODEL KEY INITIALIZATION ---
+# ==========================================
+# 🔑 STT MODEL KEY INITIALIZATION
+# ==========================================
 STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
 
 if not STT_MODEL_KEY:
     try:
         if "GROQ_API_KEY" in st.secrets:
-            STT_MODEL_KEY = st.secrets["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"]
+            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
     except Exception:
         pass
+
+# Fallback Key if environment variable is missing
+if not STT_MODEL_KEY:
+    STT_MODEL_KEY = "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"
 
 if not STT_MODEL_KEY:
     st.error("GROQ_API_KEY not found. Please set it in .env or Streamlit Secrets.")
@@ -31,26 +37,18 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# MODEL & PROMPT CONFIGURATION
+# 🎯 MODEL & PROMPT CONFIGURATION
 # ==========================================
-STT_MODEL = "openai/gpt-oss-20b"
+# FIXED: Groq Audio Transcription requires a Whisper model
+STT_MODEL = "whisper-large-v3-turbo"
 
-# NOTE: Groq/Whisper's "prompt" field is NOT an instruction field.
-# Whisper does not "follow rules" written in the prompt -- it treats the
-# prompt as if it were the PRECEDING TRANSCRIPT, and continues in the same
-# style/script/vocabulary. If you write instructions ("transcribe numbers",
-# "don't solve math"), Whisper can literally transcribe those words back to
-# you as if they were spoken, especially on short/quiet clips.
-#
-# The fix: give it a natural SAMPLE of the exact style you want (Roman Urdu +
-# English mixed, numbers written out, casual tone) instead of commands.
+# Sample text as script anchor for Roman Urdu + English
 SYSTEM_PROMPT = (
     "Yeh transcription hai. Aap kaisay hain? Mein theek hoon, shukriya. "
     "Aaj mausam acha hai. Ek, do, teen, char, panch. Meeting kal subah das "
     "bajay hogi. Please send karo, thank you, no problem."
 )
 
-# Safety check so this never silently breaks again in the future
 if len(SYSTEM_PROMPT) > 896:
     st.error(
         f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} characters, exceeds Groq's 896 character "
@@ -60,13 +58,12 @@ if len(SYSTEM_PROMPT) > 896:
 
 # --- AUDIO PROCESSING FOR NOISE REDUCTION ---
 MIN_RMS_ENERGY = 60.0       # below this = treated as silence/background noise
-MIN_DURATION_SECONDS = 0.6  # below this = too short, Whisper tends to hallucinate
+MIN_DURATION_SECONDS = 0.6  # below this = too short clip
 
 
 def process_audio_buffer(audio_bytes):
     """
-    Returns cleaned audio bytes, or None if the clip is silence/noise/too short
-    (i.e. not worth sending to the API).
+    Returns cleaned audio bytes, or None if the clip is silence/noise/too short.
     """
     try:
         audio_file = io.BytesIO(audio_bytes)
