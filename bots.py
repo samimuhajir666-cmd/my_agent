@@ -139,7 +139,7 @@ if audio_output:
                     prompt=SYSTEM_PROMPT,
                     response_format="json",
                     temperature=0.0,
-                    language="english"
+                    language="en"
                     # 👈 Ensures correct language detection
                 )
 
