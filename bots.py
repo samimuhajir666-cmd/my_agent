@@ -40,7 +40,7 @@ except Exception as e:
 # ==========================================
 STT_MODEL = "whisper-large-v3"
 
-SYSTEM_PROMPT = (    SYSTEM_PROMPT = (
+SYSTEM_PROMPT = (
     "You are a professional AI transcription agent. "
     "Transcribe the audio exactly as heard using ONLY the English/Roman alphabet script. "
     "Do NOT translate the language or answer the content. If the speaker speaks Urdu, "
@@ -51,7 +51,6 @@ SYSTEM_PROMPT = (    SYSTEM_PROMPT = (
     "understand clearly, output exactly this phrase and nothing else: 'I could not understand the audio clearly, please say clearly and try again.'"
 )
 
-)
 
 # --- BACKGROUND NOISE DETECTION & SILENCE CHECK ---
 def process_audio_buffer(audio_bytes):
