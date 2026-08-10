@@ -41,13 +41,7 @@ except Exception as e:
 STT_MODEL = "whisper-large-v3-turbo"
 
 # Whisper prompt: only for spelling/context guidance (max 244 chars)
-SYSTEM_PROMPT = SYSTEM_PROMPT = """Roman Urdu, English, Urdu, numbers, digits, plus, minus, equal, multiply,
-divide, kya, kaise, hain, main, theek, hoon, han, nahi, yes, no, ok, time, date, price, amount, payment, order, help, support,
-ticket, error, code, terminal, POS, card, payment, failed, declined, approved, transaction, receipt, invoice, refund, void, settle,
-pre-auth, capture, reversal, tip, discount, tax, subtotal, total, change, cash, credit, debit, network, timeout, connection, API, gateway, processor,
-host, port, status, code, message, response, request, payload, JSON, kya hua, kaise hai, theek hai, main hoon, han bhai, nahi bhai, chalo, ruko, suno, dekho,
-batao, karo, one, two, three, four, five, six, seven, eight, nine, ten, hundred, thousand, lakh, crore, January, February, March, April, May, June, July, August,
-September, October, November, December, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday"""
+SYSTEM_PROMPT = SYSTEM_PROMPT = """Roman Urdu, English, Urdu, numbers, digits, plus, minus, equal, multiply,divide, kya, kaise, hain, main, theek, hoon, han, nahi, yes, no, ok, time, date, price, amount, payment, order, help, support,ticket, error, code, terminal, POS, card, payment, failed, declined, approved, transaction, receipt, invoice, refund, void, settle,pre-auth, capture, reversal, tip, discount, tax, subtotal, total, change, cash, credit, debit, network, timeout, connection, API, gateway, processor,host, port, status, code, message, response, request, payload, JSON, kya hua, kaise hai, theek hai, main hoon, han bhai, nahi bhai, chalo, ruko, suno, dekho,batao, karo, one, two, three, four, five, six, seven, eight, nine, ten, hundred, thousand, lakh, crore, January, February, March, April, May, June, July, August,September, October, November, December, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday"""
 # ============================
 # 🎚️ AUDIO PROCESSING
 # ============================
