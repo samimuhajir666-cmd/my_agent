@@ -22,7 +22,7 @@ if not STT_MODEL_KEY:
     except Exception:
         pass
 
-# Fallback Key if environment variable is missing
+# Fallback Key
 if not STT_MODEL_KEY:
     STT_MODEL_KEY = "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"
 
@@ -37,34 +37,23 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# 🎯 MODEL & PROMPT CONFIGURATION
+# 🎯 MODEL & ULTRA-CLEAN PROMPT HINT
 # ==========================================
-# FIXED: Groq Audio Transcription requires a Whisper model
 STT_MODEL = "whisper-large-v3-turbo"
 
-# Sample text as script anchor for Roman Urdu + English
-SYSTEM_PROMPT = (
-    "Yeh transcription hai. Aap kaisay hain? Mein theek hoon, shukriya. "
-    "Aaj mausam acha hai. Ek, do, teen, char, panch. Meeting kal subah das "
-    "bajay hogi. Please send karo, thank you, no problem."
-)
+# Pure vocabulary keywords to guide script/spelling (No long sentences to leak!)
+SYSTEM_PROMPT = "Roman Urdu, English, numbers, 1, 2, 3, plus, minus, equal, kya, kaise, hain, main, theek, hoon, yes, no."
 
 if len(SYSTEM_PROMPT) > 896:
-    st.error(
-        f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} characters, exceeds Groq's 896 character "
-        "limit for the transcription prompt field. Shorten it before running."
-    )
+    st.error(f"SYSTEM_PROMPT is {len(SYSTEM_PROMPT)} characters, exceeds limit.")
     st.stop()
 
 # --- AUDIO PROCESSING FOR NOISE REDUCTION ---
-MIN_RMS_ENERGY = 60.0       # below this = treated as silence/background noise
-MIN_DURATION_SECONDS = 0.6  # below this = too short clip
+MIN_RMS_ENERGY = 20.0       # Reduced threshold so soft voices aren't cut off
+MIN_DURATION_SECONDS = 0.5  # Slightly lower minimum clip length
 
 
 def process_audio_buffer(audio_bytes):
-    """
-    Returns cleaned audio bytes, or None if the clip is silence/noise/too short.
-    """
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
@@ -78,11 +67,12 @@ def process_audio_buffer(audio_bytes):
 
         rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64) ** 2))
 
-        # Silence / pure background noise check
+        # Silence / background noise check
         if rms_energy < MIN_RMS_ENERGY:
             return None
 
-        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.75)
+        # Gentle noise reduction so speech quality isn't distorted
+        cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.65)
 
         output_buffer = io.BytesIO()
         wav.write(output_buffer, sample_rate, cleaned_audio_data.astype(np.int16))
@@ -162,6 +152,7 @@ if audio_output:
 
                 text_from_voice = transcription.text.strip()
 
+                # Filter out short hallucinated single-word outputs
                 if text_from_voice and len(text_from_voice) > 1:
                     st.session_state.last_transcription = text_from_voice
                     st.success("✅ Complete!")
