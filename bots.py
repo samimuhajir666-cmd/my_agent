@@ -47,17 +47,24 @@ SYSTEM_PROMPT = (
     "digits, mathematical terms, and technical keywords (e.g., 'hello 1, 2, 3', 'plus', 'equal')."
 )
 
-# --- BACKGROUND NOISE DETECTION ENGINE ---
-def remove_background_noise(audio_bytes):
+# --- BACKGROUND NOISE DETECTION & SILENCE CHECK ---
+def process_audio_buffer(audio_bytes):
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
         
-        # Convert stereo channel to mono if necessary
         if len(audio_data.shape) > 1:
             audio_data = audio_data.mean(axis=1).astype(audio_data.dtype)
             
-        # Spectral gating drops ambient background hums, keyboard clicks, and fan noises
+        # 1. FIXED: Calculate Root Mean Square (RMS) loudness to detect silence
+        # This checks the physical volume level of the recording
+        rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64)**2))
+        
+        # If the energy level is below 15.0, it means it is pure silence or just minor background hiss
+        if rms_energy < 15.0:
+            return None  # Signal that the audio is silent
+            
+        # 2. Apply Noise Reduction if the audio actually contains speech
         cleaned_audio_data = nr.reduce_noise(y=audio_data, sr=sample_rate, prop_decrease=0.95)
         
         output_buffer = io.BytesIO()
@@ -66,7 +73,6 @@ def remove_background_noise(audio_bytes):
         
         return output_buffer.read()
     except Exception:
-        # Pass raw audio seamlessly if buffer array processing hits any exception frames
         return audio_bytes
 
 st.set_page_config(
@@ -111,31 +117,40 @@ if audio_output:
         st.error("No audio data received.")
         st.stop()
         
-    # 🌟 NEW ADDITION: Cleans up background disruption artifacts before hitting cloud APIs
-    with st.spinner("⏳ Filter out background noise..."):
-        audio_bytes = remove_background_noise(audio_bytes)
+    with st.spinner("⏳ Analyzing sound levels and filtering noise..."):
+        # Process audio data arrays
+        processed_bytes = process_audio_buffer(audio_bytes)
         
-    with st.spinner("⚡ Processing speech with Groq AI Agent..."):
-        try:
-            audio_file = io.BytesIO(audio_bytes)
-            audio_file.name = "recording.wav"
-            
-            transcription = client.audio.transcriptions.create(
-                file=audio_file,
-                model=STT_MODEL,
-                prompt=SYSTEM_PROMPT,
-                response_format="json",
-                temperature=0.0
-            )
-            
-            text_from_voice = transcription.text.strip()
-            if text_from_voice:
-                st.session_state.last_transcription = text_from_voice
-                st.success("✅ Transcription complete!")
-            else:
-                st.warning("Could not detect any speech clearly.")
-        except Exception as e:
-            st.error(f"Transcription error: {e}")
+    # FIXED: If the function returned None, it means the audio was completely silent
+    if processed_bytes is None:
+        st.warning("⚠️ No speech detected. Please speak into the microphone.")
+    else:
+        with st.spinner("⚡ Processing speech with Groq AI Agent..."):
+            try:
+                audio_file = io.BytesIO(processed_bytes)
+                audio_file.name = "recording.wav"
+                
+                transcription = client.audio.transcriptions.create(
+                    file=audio_file,
+                    model=STT_MODEL,
+                    prompt=SYSTEM_PROMPT,
+                    response_format="json",
+                    temperature=0.0
+                )
+                
+                text_from_voice = transcription.text.strip()
+                
+                # Double-check protection against generic Whisper hallucinations
+                hallucination_phrases = ["thanks for watching", "thank you", "subtitles by", "amara.org"]
+                if any(phrase in text_from_voice.lower() for phrase in hallucination_phrases) and len(text_from_voice) < 25:
+                    st.warning("⚠️ No clear speech detected.")
+                elif text_from_voice:
+                    st.session_state.last_transcription = text_from_voice
+                    st.success("✅ Transcription complete!")
+                else:
+                    st.warning("Could not detect any speech clearly.")
+            except Exception as e:
+                st.error(f"Transcription error: {e}")
 
 # --- DISPLAY OUTPUT ---
 if st.session_state.last_transcription:
