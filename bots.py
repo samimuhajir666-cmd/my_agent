@@ -39,8 +39,7 @@ except Exception as e:
 STT_MODEL = "whisper-large-v3-turbo"
 
 # --- CHANGED HERE: Pure vocabulary hint to guide script & prevent prompt leak ---
-SYSTEM_PROMPT = "Roman Urdu, English, numbers 1 2 3, plus, minus, equal, kya haal hai, main theek hoon."
-
+SYSTEM_PROMPT = "Transcribe the spoken audio accurately in Roman Urdu and English. Include numbers and math symbols if spoken, e.g., 1, 2, 3, plus, minus, equal, kya haal hai, main theek hoon."
 # --- BACKGROUND NOISE DETECTION & SILENCE CHECK ---
 def process_audio_buffer(audio_bytes):
     try:
