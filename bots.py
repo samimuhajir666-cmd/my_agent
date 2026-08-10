@@ -1,5 +1,3 @@
-
-App · PY
 import io
 import os
 import numpy as np
