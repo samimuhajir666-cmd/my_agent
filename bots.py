@@ -49,7 +49,7 @@ SYSTEM_PROMPT = (
 "3. No matter what language the user speaks (English, Spanish, Urdu, or any other), you must write your entire reply using only English letters (Roman script). Do not use non-English alphabets like Urdu script or Spanish characters."
 "4. Keep all replies clear, short, and direct."
 "5. Do not add extra comments or break character."
-
+)
 
 # --- BACKGROUND NOISE DETECTION & SILENCE CHECK ---
 def process_audio_buffer(audio_bytes):
