@@ -1,15 +1,21 @@
+
 # Core app
 streamlit>=1.30.0
 groq>=0.4.0
 python-dotenv>=1.0.0
-
+ 
 # Audio recording + processing
 streamlit-mic-recorder>=0.0.4
 numpy
 scipy
 noisereduce
 Unidecode
-
+ 
+# Sound event detection (coughing, laughing, etc.)
+torch
+librosa
+panns-inference
+ 
 # Extra features (keep only if actually used elsewhere in your app --
 # e.g. streamlit-lottie for animations, gTTS for text-to-speech,
 # requests for HTTP calls, streamlit-audiorec if used as an alternate
@@ -18,3 +24,4 @@ streamlit-lottie
 requests
 gTTS
 streamlit-audiorec>=0.0.4
+ 
