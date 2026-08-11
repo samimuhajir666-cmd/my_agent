@@ -374,7 +374,7 @@ if "last_transcription" not in st.session_state:
 st.subheader("🎤 Voice Input")
 
 detect_events = st.checkbox(
-    "😮 Detect sounds like coughing, laughing, crying (adds tags like [coughing])",
+    "VOICE RECORDING HERE ↘️",
     value=True,
     help="First use downloads a ~300MB model one time. Needs internet on this machine."
 )
