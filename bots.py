@@ -268,7 +268,7 @@ MAX_DURATION_SECONDS = 120   # cap so one very long clip doesn't slow everything
 
 # Human speech mostly lives in this frequency band. Anything outside it
 # (low rumble from fans/AC/traffic, high hiss) is very unlikely to be voice.
-SPEECH_LOW_HZ = 85
+SPEECH_LOW_HZ = 600
 SPEECH_HIGH_HZ = 3400
 
 
@@ -328,7 +328,7 @@ def process_audio_buffer(audio_bytes):
             y=filtered_audio,
             sr=sample_rate,
             stationary=False,
-            prop_decrease=0.75,
+            prop_decrease=0.4,
         )
 
         # 3) Normalize volume so quiet speech isn't lost against noise
