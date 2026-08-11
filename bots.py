@@ -51,8 +51,8 @@ if len(SYSTEM_PROMPT) > 896:
 # 🎚️ AUDIO PROCESSING
 # ============================
 # FIXED: Lowered threshold so normal human speech isn't aggressively cut off
-MIN_RMS_ENERGY = 20.0
-MIN_DURATION_SECONDS = 0.5
+MIN_RMS_ENERGY = 60.0
+MIN_DURATION_SECONDS = 0.8
 
 def process_audio_buffer(audio_bytes):
     try:
