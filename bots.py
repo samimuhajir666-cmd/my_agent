@@ -179,21 +179,68 @@ def detect_sound_events(audio_data, sample_rate):
         return []
 
 
+HALLUCINATION_PHRASES = {
+    "thank you", "thank you.", "thanks for watching", "thanks for watching.",
+    "please subscribe", "subscribe", "bye", "bye.", "bye bye", "i'm going",
+    "i'm going.", "i'm going here", "see you next time", "thank you very much",
+    "thank you so much", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
+}
+NO_SPEECH_PROB_THRESHOLD = 0.6   # above this, Whisper itself thinks there was no real speech
+AVG_LOGPROB_THRESHOLD = -1.0     # below this, Whisper's own confidence in its words is low
+
+
+def is_likely_hallucinated(text, no_speech_prob, avg_logprob):
+    """
+    Whisper hallucinates stock phrases ("Thank you.", "I'm going here.") on
+    unclear/weak audio because of its training data (lots of YouTube outros).
+    We catch this two ways:
+    1) Whisper's own confidence scores (no_speech_prob / avg_logprob), when
+       the API provides them -- this is the reliable signal.
+    2) A fallback blocklist of common hallucinated phrases, in case scores
+       aren't available for some reason.
+    """
+    cleaned = text.strip().lower()
+
+    if no_speech_prob is not None and no_speech_prob > NO_SPEECH_PROB_THRESHOLD:
+        return True
+    if avg_logprob is not None and avg_logprob < AVG_LOGPROB_THRESHOLD:
+        return True
+
+    if cleaned in HALLUCINATION_PHRASES:
+        return True
+
+    return False
+
+
 def merge_speech_and_events(segments, events):
     """
     Combines Whisper's speech segments (each with start/end/text) and the
     detected non-speech events into one chronological, readable string.
-    `segments` items need .start/.end/.text (or dict-style with those keys).
+    Segments Whisper likely hallucinated (weak/unclear audio guessed into a
+    stock phrase like "Thank you." or "I'm going here.") are dropped using
+    Whisper's own confidence signals, not guessed by us.
     """
     items = []
     for seg in segments:
         seg_start = getattr(seg, "start", None)
         seg_end = getattr(seg, "end", None)
         seg_text = getattr(seg, "text", None)
+        no_speech_prob = getattr(seg, "no_speech_prob", None)
+        avg_logprob = getattr(seg, "avg_logprob", None)
         if seg_start is None and isinstance(seg, dict):
-            seg_start, seg_end, seg_text = seg.get("start"), seg.get("end"), seg.get("text")
-        if seg_text:
-            items.append((seg_start or 0.0, seg_end or 0.0, force_roman_script(seg_text.strip())))
+            seg_start = seg.get("start")
+            seg_end = seg.get("end")
+            seg_text = seg.get("text")
+            no_speech_prob = seg.get("no_speech_prob")
+            avg_logprob = seg.get("avg_logprob")
+
+        if not seg_text:
+            continue
+
+        if is_likely_hallucinated(seg_text, no_speech_prob, avg_logprob):
+            continue
+
+        items.append((seg_start or 0.0, seg_end or 0.0, force_roman_script(seg_text.strip())))
 
     for start_sec, end_sec, tag in events:
         items.append((start_sec, end_sec, tag))
@@ -327,7 +374,7 @@ if "last_transcription" not in st.session_state:
 st.subheader("🎤 Voice Input")
 
 detect_events = st.checkbox(
-    "VOICE RECORDER IS HERE",
+    "😮 Detect sounds like coughing, laughing, crying (adds tags like [coughing])",
     value=True,
     help="First use downloads a ~300MB model one time. Needs internet on this machine."
 )
