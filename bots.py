@@ -51,7 +51,9 @@ SYSTEM_PROMPT = (
     "Transcribe the audio accurately. English and Roman Urdu text like: "
     "kya haal hai, main theek hoon, billing amount kitna hua, cash or card "
     "payment failed status code 500 transaction approved number 1 2 3 "
-    "plus minus."
+    "plus minus."  
+    "never reply in wrong if you listen not clear audio, respond with 'I could not understand the audio clearly. , please say clearly and try again."
+
 )
 
 if len(SYSTEM_PROMPT) > 896:
@@ -102,6 +104,7 @@ EVENT_LABEL_MAP = {
     "sniff": "[sniffing]",
     "throat clearing": "[clearing throat]",
     "whistling": "[whistling]",
+    "silencing":"[silencing]"
 }
 
 EVENT_CONFIDENCE_THRESHOLD = 0.20  # AudioSet models give modest confidences; tuned conservatively
