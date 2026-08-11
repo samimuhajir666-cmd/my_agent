@@ -104,7 +104,8 @@ EVENT_LABEL_MAP = {
     "sniff": "[sniffing]",
     "throat clearing": "[clearing throat]",
     "whistling": "[whistling]",
-    "silencing":"[silencing]"
+    "silencing":"[silencing]",
+    "breathing" :"[breathing]"
 }
 
 EVENT_CONFIDENCE_THRESHOLD = 0.20  # AudioSet models give modest confidences; tuned conservatively
