@@ -44,11 +44,8 @@ SYSTEM_PROMPT = (
     "Transcribe the audio accurately. English and Roman Urdu text like: "
     "kya haal hai, main theek hoon, billing amount kitna hua, cash or card "
     "payment failed status code 500 transaction approved number 1 2 3 "
-    "plus minus."
-    "if you don,t listen correct voice never say anything as you wrong haring . until you understand well "
-    "listen correctly generate text correctly"
-    "scan your admin user voise does,nt metter week or strong listen clearly"
-    
+    "plus minus. If you do not hear clear speech, do not transcribe anything. "
+    "Listen correctly, generate text correctly. Scan the primary user voice clearly."
 )
 
 if len(SYSTEM_PROMPT) > 896:
@@ -93,7 +90,7 @@ EVENT_LABEL_MAP = {
     "breathing": "[breathing]",
     "wheeze": "[breathing]",
     "gasp": "[breathing]",
-    "loudness" :"[louding]",
+    "loudness": "[louding]",
 }
 
 EVENT_CONFIDENCE_THRESHOLD = 0.20
@@ -244,24 +241,25 @@ SPEECH_ABOVE_NOISE_FACTOR = 2.5
 SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
 
-# --- Advanced Human-like Cocktail Filtering Tuned Configurations ---
-DOMINANCE_FRAME_MS = 80             # Smaller frame window size for quick reaction response
-DOMINANCE_WINDOW_SECONDS = 1.0       # Tight tracking scale for dynamic spikes
-DOMINANCE_RELATIVE_THRESHOLD = 0.55  # Increased strict safety margin to separate target speaker from background
-DOMINANCE_ATTENUATION = 0.05         # Heavy suppression factor (Drops background speakers down to near-silent 5%)
+# --- Advanced Audio Cocktail Isolation Configurations ---
+DOMINANCE_FRAME_MS = 40             # Shorter frame window for high precision tracking
+DOMINANCE_WINDOW_SECONDS = 0.6       # Tight running window to capture structural speech changes
+DOMINANCE_RELATIVE_THRESHOLD = 0.65  # Increased barrier to safely identify lower-level background voices
+DOMINANCE_ATTENUATION = 0.02         # Stronger suppression factor (drops background bleed to 2% volume)
 
-# --- Pitch-based speaker identification ---
-PITCH_TOLERANCE_HZ = 30              # Stricter frequency windowing to exclude outlier voice steps
+# --- Enhanced Pitch & Confidence Filters ---
+PITCH_TOLERANCE_HZ = 25              # Stricter frequency deviation tracking
 PITCH_FMIN = 75
-PITCH_FMAX = 300                     # Capped to reject higher pitch side chatter directly
+PITCH_FMAX = 280                     # Filter top limits to intercept distant background speech pitches
 PITCH_HOP = 512
+MIN_VOICED_PROBABILITY = 0.45        # Rejects low-confidence harmonic background whispers
 
 
 def suppress_background_speaker(audio_data, sample_rate):
     """
-    Pitch-first background speaker filter:
-    Estimates primary speaker frequency metrics and actively clamps mismatched audio levels
-    to create a clean, prioritized spatial audio path.
+    Upgraded voice-dominant spatial filter. Combines running energy matrices 
+    with pitch matching metrics and probability verification weights to track 
+    the active foreground user while neutralizing secondary background voices.
     """
     frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
     n_frames = int(np.ceil(len(audio_data) / frame_len))
@@ -280,13 +278,13 @@ def suppress_background_speaker(audio_data, sample_rate):
         local_dominant[i] = np.max(frame_energy[start:end])
 
     is_background = np.zeros(n_frames, dtype=bool)
-
     f0 = np.full(n_frames, np.nan)
+    
     try:
         import librosa
 
         audio_float = audio_data.astype(np.float32) / 32768.0
-        f0_fine, _voiced_flag, _voiced_prob = librosa.pyin(
+        f0_fine, _voiced_flag, voiced_prob = librosa.pyin(
             audio_float,
             fmin=PITCH_FMIN,
             fmax=PITCH_FMAX,
@@ -296,34 +294,50 @@ def suppress_background_speaker(audio_data, sample_rate):
         fine_sample_positions = librosa.frames_to_samples(
             np.arange(len(f0_fine)), hop_length=PITCH_HOP
         )
+        
         for i in range(n_frames):
             frame_start = i * frame_len
             frame_end = frame_start + frame_len
             in_frame = (fine_sample_positions >= frame_start) & (fine_sample_positions < frame_end)
+            
             vals = f0_fine[in_frame]
-            vals = vals[~np.isnan(vals)]
-            if len(vals) > 0:
-                f0[i] = np.median(vals)
+            probs = voiced_prob[in_frame]
+            
+            # Filter tracks based on voiced confidence score thresholds
+            valid_mask = (~np.isnan(vals)) & (probs >= MIN_VOICED_PROBABILITY)
+            valid_vals = vals[valid_mask]
+            
+            if len(valid_vals) > 0:
+                f0[i] = np.median(valid_vals)
     except Exception:
         pass
 
     voiced_mask = ~np.isnan(f0)
 
     if voiced_mask.any():
-        energy_cutoff = np.percentile(frame_energy[voiced_mask], 50)
+        energy_cutoff = np.percentile(frame_energy[voiced_mask], 60)
         reference_mask = voiced_mask & (frame_energy >= energy_cutoff)
         reference_pitches = f0[reference_mask] if reference_mask.any() else f0[voiced_mask]
         admin_pitch = np.median(reference_pitches)
 
+        # Flag frequencies deviating from target user metrics
         pitch_mismatch = voiced_mask & (np.abs(f0 - admin_pitch) > PITCH_TOLERANCE_HZ)
         is_background |= pitch_mismatch
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        unvoiced_quiet = (~voiced_mask) & (frame_energy < DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
+        unvoiced_quiet = (frame_energy < DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
     is_background |= unvoiced_quiet
 
+    # Create smooth gain transitions to maintain natural audio curves
     gain = np.ones(n_frames)
     gain[is_background] = DOMINANCE_ATTENUATION
+
+    # Smooth the gain transition array using a windowed filter
+    if len(gain) > 5:
+        smoothing_window = signal.windows.hamming(5)
+        smoothing_window /= np.sum(smoothing_window)
+        gain = signal.convolve(gain, smoothing_window, mode='same')
+        gain = np.clip(gain, DOMINANCE_ATTENUATION, 1.0)
 
     output = audio_data.astype(np.float64).copy()
     for i in range(n_frames):
@@ -430,6 +444,8 @@ def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
