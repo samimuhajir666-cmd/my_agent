@@ -3,11 +3,9 @@ import os
 import re
 import numpy as np
 import scipy.io.wavfile as wav
-import scipy.signal as signal
-import noisereduce as nr
 import streamlit as st
 from dotenv import load_dotenv
-from groq import Groq
+from openai import OpenAI
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
 
@@ -16,53 +14,43 @@ load_dotenv()
 # ============================
 # 🔑 API KEY INITIALIZATION
 # ============================
-STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
+API_KEY = os.getenv("OPENAI_API_KEY")
 
-if not STT_MODEL_KEY:
+if not API_KEY:
     try:
-        if "GROQ_API_KEY" in st.secrets:
-            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
+        if "OPENAI_API_KEY" in st.secrets:
+            API_KEY = st.secrets["OPENAI_API_KEY"]
     except Exception:
         pass
 
-# SECURITY: never hardcode a real API key here.
-if not STT_MODEL_KEY:
-    st.error("GROQ_API_KEY not found. Please set it in .env or Streamlit Secrets.")
+if not API_KEY:
+    st.error("OPENAI_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
 
 try:
-    client = Groq(api_key=STT_MODEL_KEY)
+    client = OpenAI(api_key=API_KEY)
 except Exception as e:
-    st.error(f"Could not initialize Groq client: {e}")
+    st.error(f"Could not initialize OpenAI client: {e}")
     st.stop()
 
 # ============================
-# 🎯 MODEL & PROMPT
+# 🎯 MODEL SETTINGS
 # ============================
-STT_MODEL = "whisper-large-v3-turbo"
+STT_MODEL = "gpt-4o-transcribe-diarize"
 
-# FIXED: Whisper's "prompt" field biases vocabulary/style -- it does NOT
-# follow instructions. Writing commands here ("never reply wrong...",
-# "respond with...") risks Whisper literally transcribing those words back
-# as if they were spoken (this happened before -- that's why it was
-# removed). Keep this as a natural example only.
-SYSTEM_PROMPT = (
-    "Transcribe the audio accurately. English and Roman Urdu text like: "
-    "kya haal hai, main theek hoon, billing amount kitna hua, cash or card "
-    "payment failed status code 500 transaction approved number 1 2 3 "
-    "plus minus."
-)
+# NO enrollment, no fixed "admin" voice file. Every recording is diarized
+# fresh -- the model labels whoever it hears as Speaker A, Speaker B, etc.
+# We show all of it, clearly separated by speaker, and the person reading
+# it decides what's relevant. This avoids the fragility of assuming there's
+# always exactly one fixed "admin" voice across every use of the app.
 
-if len(SYSTEM_PROMPT) > 896:
-    st.error("SYSTEM_PROMPT exceeds character limit.")
-    st.stop()
+MIN_DURATION_SECONDS = 0.8
 
 
-# --- FORCE ROMAN SCRIPT (guarantee, doesn't rely on Whisper "obeying") ---
 def force_roman_script(text):
-    """Any non-Latin character (Arabic, Urdu, Devanagari, etc.) gets
-    converted to its closest Roman-letter form. Already-Roman text passes
-    through unchanged."""
+    """Any non-Latin character gets converted to its closest Roman-letter
+    form. gpt-4o-transcribe-diarize doesn't support a prompt field to bias
+    script, so this safety net matters more here than before."""
     if not text:
         return text
     has_non_ascii = bool(re.search(r'[^\x00-\x7F]', text))
@@ -71,498 +59,42 @@ def force_roman_script(text):
     return unidecode(text)
 
 
-# ============================
-# 😮 NON-SPEECH SOUND EVENT DETECTION (coughing, laughing, breathing, etc.)
-# ============================
-# Whisper only transcribes WORDS -- it has no concept of "coughing" or
-# "breathing". To caption those (like YouTube closed captions do), we run a
-# second, separate model: PANNs, trained on Google's AudioSet (527 sound
-# categories). This is a real audio classifier, not a language model, so
-# it can reliably recognize non-speech sounds.
-#
-# NOTE: first run downloads a ~300MB checkpoint automatically -- needs
-# normal internet access on whatever machine actually runs this app.
-EVENT_LABEL_MAP = {
-    "cough": "[coughing]",
-    "laughter": "[laughing]",
-    "baby laughter": "[laughing]",
-    "giggle": "[laughing]",
-    "snicker": "[laughing]",
-    "belly laugh": "[laughing]",
-    "chuckle, chortle": "[laughing]",
-    "crying, sobbing": "[crying]",
-    "baby cry, infant cry": "[crying]",
-    "whimper": "[crying]",
-    "screaming": "[screaming]",
-    "clapping": "[clapping]",
-    "applause": "[clapping]",
-    "sneeze": "[sneezing]",
-    "sigh": "[sighing]",
-    "sniff": "[sniffing]",
-    "throat clearing": "[clearing throat]",
-    "whistling": "[whistling]",
-    "breathing": "[breathing]",
-    "wheeze": "[breathing]",
-    "gasp": "[breathing]",
-}
-
-# NOTE on breathing specifically: it's a much quieter/subtler sound than
-# coughing or laughing, so AudioSet models give it lower confidence even
-# when it's really there. We use a separate, lower threshold just for it
-# so normal breathing actually gets caught instead of being ignored.
-EVENT_CONFIDENCE_THRESHOLD = 0.20   # general threshold for most events
-BREATHING_CONFIDENCE_THRESHOLD = 0.12  # lower bar specifically for breathing/sigh/gasp
-BREATHING_LABELS = {"breathing", "wheeze", "gasp"}
-
-EVENT_WINDOW_SECONDS = 1.5   # granularity of event detection (smaller = more precise timing, slower)
-PANNS_SAMPLE_RATE = 32000   # PANNs models expect 32kHz mono audio
+def get_audio_duration(audio_bytes):
+    sample_rate, audio_data = wav.read(io.BytesIO(audio_bytes))
+    return len(audio_data) / float(sample_rate)
 
 
-@st.cache_resource(show_spinner=False)
-def load_sound_event_model():
-    """Loads the PANNs AudioSet tagging model once and caches it for the
-    life of the app process (not re-downloaded/reloaded on every recording)."""
-    from panns_inference import AudioTagging
-    return AudioTagging(checkpoint_path=None, device="cpu")
-
-
-def detect_sound_events(audio_data, sample_rate):
+def group_by_speaker(segments):
     """
-    Runs the audio through PANNs in fixed windows and returns a list of
-    (start_seconds, end_seconds, tag) for any recognized non-speech event
-    that crosses the confidence threshold. Consecutive windows with the
-    same tag are merged into a single span.
-    Returns [] if the model can't be loaded (e.g. no internet for the
-    first-time download) -- event detection is a bonus, never blocks
-    transcription.
+    Turns a flat list of diarized segments into readable, speaker-labeled
+    blocks -- consecutive segments from the same speaker are merged so the
+    output reads like a real conversation transcript, not a choppy list.
+    Returns a list of (speaker_label, combined_text) in chronological order.
     """
-    try:
-        model = load_sound_event_model()
-    except Exception:
-        return []
-
-    try:
-        import librosa
-        from panns_inference import labels as audioset_labels
-
-        audio_float = audio_data.astype(np.float32) / 32768.0
-        if sample_rate != PANNS_SAMPLE_RATE:
-            audio_float = librosa.resample(
-                audio_float, orig_sr=sample_rate, target_sr=PANNS_SAMPLE_RATE
-            )
-
-        window_len = int(EVENT_WINDOW_SECONDS * PANNS_SAMPLE_RATE)
-        total_len = len(audio_float)
-
-        raw_events = []  # (start_sec, end_sec, tag)
-        for start_sample in range(0, total_len, window_len):
-            end_sample = min(start_sample + window_len, total_len)
-            chunk = audio_float[start_sample:end_sample]
-            if len(chunk) < PANNS_SAMPLE_RATE * 0.3:  # skip tiny leftover tail
-                continue
-
-            clipwise_output, _ = model.inference(chunk[None, :])
-            probs = clipwise_output[0]
-
-            for idx, prob in enumerate(probs):
-                label_name = audioset_labels[idx].strip().lower()
-                if label_name not in EVENT_LABEL_MAP:
-                    continue
-
-                threshold = (
-                    BREATHING_CONFIDENCE_THRESHOLD
-                    if label_name in BREATHING_LABELS
-                    else EVENT_CONFIDENCE_THRESHOLD
-                )
-                if prob < threshold:
-                    continue
-
-                start_sec = start_sample / PANNS_SAMPLE_RATE
-                end_sec = end_sample / PANNS_SAMPLE_RATE
-                raw_events.append((start_sec, end_sec, EVENT_LABEL_MAP[label_name]))
-
-        # Merge consecutive/overlapping windows that share the same tag
-        raw_events.sort(key=lambda e: e[0])
-        merged = []
-        for start_sec, end_sec, tag in raw_events:
-            if merged and merged[-1][2] == tag and start_sec <= merged[-1][1] + 0.1:
-                merged[-1] = (merged[-1][0], end_sec, tag)
-            else:
-                merged.append((start_sec, end_sec, tag))
-
-        return merged
-    except Exception:
-        return []
-
-
-HALLUCINATION_PHRASES = {
-    "thank you", "thank you.", "thanks for watching", "thanks for watching.",
-    "please subscribe", "subscribe", "bye", "bye.", "bye bye", "i'm going",
-    "i'm going.", "i'm going here", "see you next time", "thank you very much",
-    "thank you so much", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
-}
-NO_SPEECH_PROB_THRESHOLD = 0.5  # above this, Whisper itself thinks there was no real speech
-AVG_LOGPROB_THRESHOLD = -1.0     # below this, Whisper's own confidence in its words is low
-
-
-def is_likely_hallucinated(text, no_speech_prob, avg_logprob):
-    """
-    Whisper hallucinates stock phrases ("Thank you.", "I'm going here.") on
-    unclear/weak audio because of its training data (lots of YouTube outros).
-    We catch this two ways:
-    1) Whisper's own confidence scores (no_speech_prob / avg_logprob), when
-       the API provides them -- this is the reliable signal.
-    2) A fallback blocklist of common hallucinated phrases, in case scores
-       aren't available for some reason.
-    """
-    cleaned = text.strip().lower()
-
-    if no_speech_prob is not None and no_speech_prob > NO_SPEECH_PROB_THRESHOLD:
-        return True
-    if avg_logprob is not None and avg_logprob < AVG_LOGPROB_THRESHOLD:
-        return True
-
-    if cleaned in HALLUCINATION_PHRASES:
-        return True
-
-    return False
-
-
-def merge_speech_and_events(segments, events):
-    """
-    Combines Whisper's speech segments (each with start/end/text) and the
-    detected non-speech events into one chronological, readable string.
-    Segments Whisper likely hallucinated (weak/unclear audio guessed into a
-    stock phrase like "Thank you." or "I'm going here.") are dropped using
-    Whisper's own confidence signals, not guessed by us.
-    """
-    items = []
+    blocks = []
     for seg in segments:
-        seg_start = getattr(seg, "start", None)
-        seg_end = getattr(seg, "end", None)
-        seg_text = getattr(seg, "text", None)
-        no_speech_prob = getattr(seg, "no_speech_prob", None)
-        avg_logprob = getattr(seg, "avg_logprob", None)
-        if seg_start is None and isinstance(seg, dict):
-            seg_start = seg.get("start")
-            seg_end = seg.get("end")
-            seg_text = seg.get("text")
-            no_speech_prob = seg.get("no_speech_prob")
-            avg_logprob = seg.get("avg_logprob")
-
-        if not seg_text:
+        speaker = getattr(seg, "speaker", None) or "Unknown"
+        text = getattr(seg, "text", None)
+        if not text:
             continue
-
-        if is_likely_hallucinated(seg_text, no_speech_prob, avg_logprob):
-            continue
-
-        items.append((seg_start or 0.0, seg_end or 0.0, force_roman_script(seg_text.strip())))
-
-    for start_sec, end_sec, tag in events:
-        items.append((start_sec, end_sec, tag))
-
-    items.sort(key=lambda x: x[0])
-
-    parts = []
-    for _, _, text in items:
-        if parts and parts[-1] == text:
-            continue  # avoid repeating the same tag back-to-back
-        parts.append(text)
-
-    return " ".join(parts).strip()
-
-
-# ============================
-# 🎚️ AUDIO PROCESSING (noise handling)
-# ============================
-MIN_RMS_ENERGY = 60.0        # absolute floor -- frames quieter than this are never speech
-MIN_DURATION_SECONDS = 2  # below this = too short, Whisper tends to hallucinate
-MAX_DURATION_SECONDS = 120   # cap so one very long clip doesn't slow everything down
-
-# --- Voice Activity Detection (VAD) settings ---
-# IMPORTANT: we check small frames individually instead of averaging energy
-# across the WHOLE clip. A long recording with silence...speech...silence
-# would get its real speech "diluted" by a whole-clip average and the
-# entire clip would get wrongly rejected. This was a recurring bug --
-# do not replace this with a single whole-buffer RMS check again.
-VAD_FRAME_MS = 30
-MIN_SPEECH_SECONDS = 0.3
-NOISE_FLOOR_PERCENTILE = 10
-SPEECH_ABOVE_NOISE_FACTOR = 2.5
-
-# FIXED: Human speech FUNDAMENTAL frequency lives around 85-255 Hz (85 for
-# low male voices up to ~255 for higher female voices), with harmonics
-# extending up to ~3400 Hz. A low cutoff of 600 Hz (as this file had)
-# strips out the fundamental entirely and badly weakens/muffles the voice.
-SPEECH_LOW_HZ = 50
-SPEECH_HIGH_HZ = 3600
-
-# --- "Ignore the person talking in the background" settings ---
-# We can't truly separate two overlapping voices with simple signal
-# processing (that needs a heavy source-separation model). What we CAN do
-# reliably: assume the admin is the one closer to the mic, so their voice
-# is louder. Any moment that's quiet relative to the loudest nearby voice
-# gets pulled down instead of removed outright (avoids harsh clicking).
-DOMINANCE_FRAME_MS = 100        # coarser than VAD frames -- smoother loudness envelope
-DOMINANCE_WINDOW_SECONDS = 1.5  # how far around each moment we look for "who's loudest nearby"
-DOMINANCE_RELATIVE_THRESHOLD = 0.66  # quieter than 45% of the loudest nearby voice = flagged as possible background
-DOMINANCE_ATTENUATION = 0.67   # background voice is turned down to 15% volume, not muted completely
-
-# --- Pitch-based rescue for the admin's own quiet moments ---
-# Loudness alone can't tell "admin talking softly" apart from "someone else
-# talking". Each person's voice has a fairly stable pitch (fundamental
-# frequency), so: find the admin's typical pitch from their loud moments,
-# and if a "quiet" frame has THAT SAME pitch, it's still the admin -- don't
-# suppress it. Only suppress quiet frames with a genuinely different pitch.
-PITCH_TOLERANCE_HZ = 40
-PITCH_FMIN = 75
-PITCH_FMAX = 400
-PITCH_HOP = 600 # librosa's own small internal hop for reliable pitch tracking
-
-
-def suppress_background_speaker(audio_data, sample_rate):
-    """
-    Pitch-first background speaker filter:
-    1) Estimates the admin's typical pitch (energy-weighted, so louder
-       moments count more toward "whose pitch is this").
-    2) ANY voiced frame whose pitch doesn't match the admin's pitch gets
-       attenuated -- REGARDLESS of how loud it is. This matters because a
-       background speaker on the same mic is often not much quieter than
-       the admin, so a loudness-only gate never even considers them.
-    3) For frames where pitch can't be detected (unvoiced sounds, breath,
-       near-silence), we fall back to the loudness-relative check, since
-       pitch can't help there.
-
-    LIMITATION: if the admin and the background speaker have very similar
-    voice pitch, this still can't tell them apart -- that needs a proper
-    voice-identity model (the "enrollment" approach we skipped for speed).
-    """
-    frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
-    n_frames = int(np.ceil(len(audio_data) / frame_len))
-
-    frame_energy = np.zeros(n_frames)
-    for i in range(n_frames):
-        chunk = audio_data[i * frame_len:(i + 1) * frame_len]
-        if len(chunk) > 0:
-            frame_energy[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
-
-    window_frames = max(1, int(DOMINANCE_WINDOW_SECONDS * 1000 / DOMINANCE_FRAME_MS))
-    local_dominant = np.zeros(n_frames)
-    for i in range(n_frames):
-        start = max(0, i - window_frames // 2)
-        end = min(n_frames, i + window_frames // 2 + 1)
-        local_dominant[i] = np.max(frame_energy[start:end])
-
-    is_background = np.zeros(n_frames, dtype=bool)
-
-    # --- Pitch tracking ---
-    f0 = np.full(n_frames, np.nan)
-    try:
-        import librosa
-
-        audio_float = audio_data.astype(np.float32) / 32768.0
-        f0_fine, _voiced_flag, _voiced_prob = librosa.pyin(
-            audio_float,
-            fmin=PITCH_FMIN,
-            fmax=PITCH_FMAX,
-            sr=sample_rate,
-            hop_length=PITCH_HOP,
-        )
-        fine_sample_positions = librosa.frames_to_samples(
-            np.arange(len(f0_fine)), hop_length=PITCH_HOP
-        )
-        for i in range(n_frames):
-            frame_start = i * frame_len
-            frame_end = frame_start + frame_len
-            in_frame = (fine_sample_positions >= frame_start) & (fine_sample_positions < frame_end)
-            vals = f0_fine[in_frame]
-            vals = vals[~np.isnan(vals)]
-            if len(vals) > 0:
-                f0[i] = np.median(vals)
-    except Exception:
-        pass  # pitch tracking failed entirely -- fall back to loudness-only below
-
-    voiced_mask = ~np.isnan(f0)
-
-    if voiced_mask.any():
-        # Admin pitch = energy-weighted: use the louder half of voiced
-        # frames as the reference, since the admin is usually closer/louder
-        # overall even if any single moment isn't dramatically so.
-        energy_cutoff = np.percentile(frame_energy[voiced_mask], 50)
-        reference_mask = voiced_mask & (frame_energy >= energy_cutoff)
-        reference_pitches = f0[reference_mask] if reference_mask.any() else f0[voiced_mask]
-        admin_pitch = np.median(reference_pitches)
-
-        # KEY FIX: pitch mismatch flags a frame as background REGARDLESS of
-        # loudness -- a loud background speaker no longer slips through.
-        pitch_mismatch = voiced_mask & (np.abs(f0 - admin_pitch) > PITCH_TOLERANCE_HZ)
-        is_background |= pitch_mismatch
-
-    # --- Loudness fallback for frames with no usable pitch (breaths, consonants, near-silence) ---
-    with np.errstate(divide="ignore", invalid="ignore"):
-        unvoiced_quiet = (~voiced_mask) & (frame_energy < DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
-    is_background |= unvoiced_quiet
-
-    gain = np.ones(n_frames)
-    gain[is_background] = DOMINANCE_ATTENUATION
-
-    output = audio_data.astype(np.float64).copy()
-    for i in range(n_frames):
-        start = i * frame_len
-        end = min(len(audio_data), start + frame_len)
-        output[start:end] *= gain[i]
-
-    return output.astype(audio_data.dtype)
-
-
-def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
-    """Cuts frequencies outside the human speech range, removing a lot of
-    non-voice background noise (fans, traffic rumble, hiss) before it ever
-    reaches the noise-reduction or transcription step."""
-    nyquist = 0.8 * sample_rate
-    low = low_hz / nyquist
-    high = min(high_hz / nyquist, 1.00)
-    b, a = signal.butter(4, [low, high], btype="band")
-    filtered = signal.filtfilt(b, a, audio_data.astype(np.float64))
-    return filtered
-
-
-def normalize_audio(audio_data, target_peak=1.0):
-    """Brings quiet recordings up to a consistent volume so a soft voice
-    isn't drowned out relative to noise."""
-    max_val = np.max(np.abs(audio_data))
-    if max_val < 1e-6:
-        return audio_data
-    scale = (target_peak * 3500.0) / max_val
-    return audio_data * scale
-
-
-def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
-    """Splits audio into short frames and returns the RMS energy of each."""
-    frame_len = max(1, int(sample_rate * frame_ms / 1000))
-    energies = []
-    for start in range(0, len(audio_data), frame_len):
-        chunk = audio_data[start:start + frame_len]
-        if len(chunk) == 0:
-            continue
-        energies.append(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
-    return energies
-
-
-def contains_real_speech(audio_data, sample_rate):
-    """
-    Frame-based check: does this clip contain enough speech-level audio,
-    REGARDLESS of how much silence surrounds it? A recording that is mostly
-    quiet with short bursts of talking still passes, because we look at
-    individual frames instead of one whole-clip average.
-    """
-    energies = frame_energies(audio_data, sample_rate)
-    if not energies:
-        return False
-
-    noise_floor = np.percentile(energies, NOISE_FLOOR_PERCENTILE)
-    dynamic_threshold = max(noise_floor * SPEECH_ABOVE_NOISE_FACTOR, MIN_RMS_ENERGY)
-
-    speech_frame_count = sum(1 for e in energies if e > dynamic_threshold)
-    speech_seconds = speech_frame_count * (VAD_FRAME_MS / 1000)
-
-    return speech_seconds >= MIN_SPEECH_SECONDS
-
-
-def process_audio_buffer(audio_bytes):
-    """Returns (transcription_ready_bytes, raw_mono_audio, sample_rate), or
-    None if the clip is silence/noise/too short (not worth sending to the
-    API). raw_mono_audio is returned separately (before bandpass filtering)
-    so the sound-event detector sees the full original spectrum."""
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        sample_rate, audio_data = wav.read(audio_file)
-
-        if len(audio_data.shape) > 1:
-            audio_data = audio_data.mean(axis=1).astype(audio_data.dtype)
-
-        duration_seconds = len(audio_data) / float(sample_rate)
-        if duration_seconds < MIN_DURATION_SECONDS:
-            return None
-        if duration_seconds > MAX_DURATION_SECONDS:
-            audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
-
-        # FIXED: frame-based VAD instead of whole-clip average RMS.
-        # Also apply background-speaker suppression FIRST so the VAD check
-        # (and everything downstream) is judging the admin's voice, not
-        # whoever else happens to be talking nearby.
-        focused_audio = suppress_background_speaker(audio_data, sample_rate)
-
-        if not contains_real_speech(focused_audio, sample_rate):
-            return None
-
-        raw_mono_audio = focused_audio.copy()
-
-        # 1) Keep only the frequency range where human speech lives
-        filtered_audio = bandpass_filter(focused_audio, sample_rate)
-
-        # 2) Non-stationary noise reduction: adapts to changing background
-        #    noise instead of assuming a constant noise floor.
-        cleaned_audio_data = nr.reduce_noise(
-            y=filtered_audio,
-            sr=sample_rate,
-            stationary=False,
-            prop_decrease=0.4,
-        )
-
-        # 3) Normalize volume so quiet speech isn't lost against noise
-        cleaned_audio_data = normalize_audio(cleaned_audio_data)
-
-        output_buffer = io.BytesIO()
-        wav.write(output_buffer, sample_rate, cleaned_audio_data.astype(np.int16))
-        output_buffer.seek(0)
-
-        return output_buffer.read(), raw_mono_audio, sample_rate
-    except Exception:
-        return None
+        clean_text = force_roman_script(text.strip())
+        if blocks and blocks[-1][0] == speaker:
+            blocks[-1] = (speaker, blocks[-1][1] + " " + clean_text)
+        else:
+            blocks.append((speaker, clean_text))
+    return blocks
 
 
 # ============================
 # 🖥️ STREAMLIT UI
 # ============================
-st.set_page_config(
-    page_title="Speech to Text",
-    page_icon="🎤",
-    layout="centered"
-)
+st.set_page_config(page_title="Speech to Text", page_icon="🎤", layout="centered")
 
+if "last_transcription_blocks" not in st.session_state:
+    st.session_state.last_transcription_blocks = []
 
-def load_css(file_path="style.css"):
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-
-def load_html(file_path="index.html"):
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            try:
-                st.html(f.read())
-            except Exception:
-                st.markdown(f.read(), unsafe_allow_html=True)
-
-
-load_css("style.css")
-load_html("index.html")
-
-if "last_transcription" not in st.session_state:
-    st.session_state.last_transcription = ""
-
-st.subheader("🎤 Voice Input")
-
-# FIXED: this checkbox controls sound-event detection (coughing, laughing,
-# breathing tags) -- it does NOT start the recording. Mislabeling it as
-# "VOICE RECORDING HERE" would confuse anyone using the app.
-detect_events = st.checkbox(
-    "VOICE DETECTOR",
-    value=True,
-    help="First use downloads a ~300MB model one time. Needs internet on this machine."
-)
+st.title("🎤 Voice Input")
+st.caption("Har awaz sunta hai, speaker ke hisaab se label karta hai — tum decide karo kaunsi zaroori hai.")
 
 audio_output = mic_recorder(
     start_prompt="🎤 Click to Start Recording",
@@ -582,47 +114,33 @@ if audio_output:
         st.error("No audio data received.")
         st.stop()
 
-    with st.spinner("⏳ Processing sound..."):
-        result = process_audio_buffer(audio_bytes)
+    try:
+        duration = get_audio_duration(audio_bytes)
+    except Exception:
+        st.error("Could not read audio file.")
+        st.stop()
 
-    if result is None:
-        st.warning("⚠️ Noise, silence, or clip too short. Please speak clearly into the mic.")
+    if duration < MIN_DURATION_SECONDS:
+        st.warning("⚠️ Recording bohot chhoti hai, phir se try karein.")
     else:
-        processed_bytes, raw_mono_audio, sample_rate = result
-
-        with st.spinner("⚡ Transcribing speech..."):
+        with st.spinner("⚡ Transcribing + identifying speakers..."):
             try:
-                audio_file = io.BytesIO(processed_bytes)
+                audio_file = io.BytesIO(audio_bytes)
                 audio_file.name = "recording.wav"
 
                 transcription = client.audio.transcriptions.create(
                     file=audio_file,
                     model=STT_MODEL,
-                    prompt=SYSTEM_PROMPT,
-                    response_format="verbose_json",
-                    temperature=0.5
+                    response_format="diarized_json",
+                    chunking_strategy="auto",
                 )
 
                 segments = getattr(transcription, "segments", None) or []
+                blocks = group_by_speaker(segments)
 
-                if detect_events:
-                    with st.spinner("😮 Checking for coughing, laughing, breathing..."):
-                        events = detect_sound_events(raw_mono_audio, sample_rate)
-                else:
-                    events = []
-
-                if segments:
-                    text_from_voice = merge_speech_and_events(segments, events)
-                else:
-                    raw_text = getattr(transcription, "text", "").strip()
-                    text_from_voice = force_roman_script(raw_text)
-                    if events:
-                        tags = " ".join(sorted(set(tag for _, _, tag in events)))
-                        text_from_voice = f"{text_from_voice} {tags}".strip()
-
-                if text_from_voice and len(text_from_voice) > 1:
-                    st.session_state.last_transcription = text_from_voice
-                    st.success("✅ Complete!")
+                if blocks:
+                    st.session_state.last_transcription_blocks = blocks
+                    st.success(f"✅ Complete! {len(set(b[0] for b in blocks))} speaker(s) detected.")
                 else:
                     st.warning("⚠️ Could not detect clear speech.")
 
@@ -630,32 +148,44 @@ if audio_output:
                 st.error(f"Transcription error: {e}")
 
 # ============================
-# 📝 DISPLAY OUTPUT
+# 📝 DISPLAY OUTPUT -- speaker-labeled, like a real transcript
 # ============================
-if st.session_state.last_transcription:
-    st.markdown("### 📝 Transcribed Text")
-    st.markdown(
-        f"""
-        <div class="output-card">
-            <div class="output-title">Result:</div>
-            <div class="output-text">{st.session_state.last_transcription}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+SPEAKER_COLORS = ["#ff4b4b", "#4b9eff", "#4bff88", "#ffb84b", "#c94bff"]
 
-st.divider()
+if st.session_state.last_transcription_blocks:
+    st.markdown("### 📝 Transcript")
 
-col1, col2 = st.columns(2)
+    speaker_order = []
+    for speaker, _ in st.session_state.last_transcription_blocks:
+        if speaker not in speaker_order:
+            speaker_order.append(speaker)
+    color_map = {sp: SPEAKER_COLORS[i % len(SPEAKER_COLORS)] for i, sp in enumerate(speaker_order)}
 
-with col1:
-    if st.button("🛑 Lock Text", use_container_width=True):
-        if st.session_state.last_transcription:
+    for speaker, text in st.session_state.last_transcription_blocks:
+        color = color_map.get(speaker, "#888888")
+        st.markdown(
+            f"""
+            <div style="background-color:#1e2530; padding:12px; border-radius:8px;
+                        border-left:4px solid {color}; margin-bottom:8px;">
+                <div style="color:{color}; font-weight:bold; font-size:13px; margin-bottom:4px;">
+                    {speaker}
+                </div>
+                <div>{text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.divider()
+
+    # Plain combined text, useful for copy/lock
+    full_text = "\n".join(f"{speaker}: {text}" for speaker, text in st.session_state.last_transcription_blocks)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🛑 Lock Text", use_container_width=True):
             st.success("Text saved.")
-        else:
-            st.warning("No recorded text available.")
-
-with col2:
-    if st.button("🗑️ Clear Text", use_container_width=True):
-        st.session_state.last_transcription = ""
-        st.rerun()
+    with col2:
+        if st.button("🗑️ Clear Text", use_container_width=True):
+            st.session_state.last_transcription_blocks = []
+            st.rerun()
