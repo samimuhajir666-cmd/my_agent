@@ -92,6 +92,7 @@ EVENT_LABEL_MAP = {
     "breathing": "[breathing]",
     "wheeze": "[breathing]",
     "gasp": "[breathing]",
+    "loudness" :"[louding]",
 }
 
 EVENT_CONFIDENCE_THRESHOLD = 0.20
