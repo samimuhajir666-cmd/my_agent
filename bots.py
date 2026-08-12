@@ -25,10 +25,7 @@ if not STT_MODEL_KEY:
     except Exception:
         pass
 
-# SECURITY: never hardcode a real API key here. If it's missing, stop and
-# tell the user to set it properly instead of silently falling back to a
-# key baked into the source file (that key becomes public the moment this
-# file is shared, pasted, or committed anywhere).
+# SECURITY: never hardcode a real API key here.
 if not STT_MODEL_KEY:
     st.error("GROQ_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
@@ -44,16 +41,16 @@ except Exception as e:
 # ============================
 STT_MODEL = "whisper-large-v3-turbo"
 
-# Whisper's "prompt" field biases vocabulary/style, it does not enforce
-# rules. A short natural example in the target style/script works better
-# than a list of instructions. Kept under 896 chars (hard API limit).
+# FIXED: Whisper's "prompt" field biases vocabulary/style -- it does NOT
+# follow instructions. Writing commands here ("never reply wrong...",
+# "respond with...") risks Whisper literally transcribing those words back
+# as if they were spoken (this happened before -- that's why it was
+# removed). Keep this as a natural example only.
 SYSTEM_PROMPT = (
     "Transcribe the audio accurately. English and Roman Urdu text like: "
     "kya haal hai, main theek hoon, billing amount kitna hua, cash or card "
     "payment failed status code 500 transaction approved number 1 2 3 "
-    "plus minus."  
-    "never reply in wrong if you listen not clear audio, respond with 'I could not understand the audio clearly. , please say clearly and try again."
-
+    "plus minus."
 )
 
 if len(SYSTEM_PROMPT) > 896:
@@ -75,10 +72,10 @@ def force_roman_script(text):
 
 
 # ============================
-# 😮 NON-SPEECH SOUND EVENT DETECTION (coughing, laughing, etc.)
+# 😮 NON-SPEECH SOUND EVENT DETECTION (coughing, laughing, breathing, etc.)
 # ============================
 # Whisper only transcribes WORDS -- it has no concept of "coughing" or
-# "laughing". To caption those (like YouTube closed captions do), we run a
+# "breathing". To caption those (like YouTube closed captions do), we run a
 # second, separate model: PANNs, trained on Google's AudioSet (527 sound
 # categories). This is a real audio classifier, not a language model, so
 # it can reliably recognize non-speech sounds.
@@ -104,13 +101,21 @@ EVENT_LABEL_MAP = {
     "sniff": "[sniffing]",
     "throat clearing": "[clearing throat]",
     "whistling": "[whistling]",
-    "silencing":"[silencing]",
-    "breathing" :"[breathing]"
+    "breathing": "[breathing]",
+    "wheeze": "[breathing]",
+    "gasp": "[breathing]",
 }
 
-EVENT_CONFIDENCE_THRESHOLD = 0.20  # AudioSet models give modest confidences; tuned conservatively
-EVENT_WINDOW_SECONDS = 1.5         # granularity of event detection (smaller = more precise timing, slower)
-PANNS_SAMPLE_RATE = 32000          # PANNs models expect 32kHz mono audio
+# NOTE on breathing specifically: it's a much quieter/subtler sound than
+# coughing or laughing, so AudioSet models give it lower confidence even
+# when it's really there. We use a separate, lower threshold just for it
+# so normal breathing actually gets caught instead of being ignored.
+EVENT_CONFIDENCE_THRESHOLD = 0.20   # general threshold for most events
+BREATHING_CONFIDENCE_THRESHOLD = 0.12  # lower bar specifically for breathing/sigh/gasp
+BREATHING_LABELS = {"breathing", "wheeze", "gasp"}
+
+EVENT_WINDOW_SECONDS = 1.5   # granularity of event detection (smaller = more precise timing, slower)
+PANNS_SAMPLE_RATE = 32000   # PANNs models expect 32kHz mono audio
 
 
 @st.cache_resource(show_spinner=False)
@@ -138,6 +143,7 @@ def detect_sound_events(audio_data, sample_rate):
 
     try:
         import librosa
+        from panns_inference import labels as audioset_labels
 
         audio_float = audio_data.astype(np.float32) / 32768.0
         if sample_rate != PANNS_SAMPLE_RATE:
@@ -158,16 +164,22 @@ def detect_sound_events(audio_data, sample_rate):
             clipwise_output, _ = model.inference(chunk[None, :])
             probs = clipwise_output[0]
 
-            from panns_inference import labels as audioset_labels
-
             for idx, prob in enumerate(probs):
-                if prob < EVENT_CONFIDENCE_THRESHOLD:
-                    continue
                 label_name = audioset_labels[idx].strip().lower()
-                if label_name in EVENT_LABEL_MAP:
-                    start_sec = start_sample / PANNS_SAMPLE_RATE
-                    end_sec = end_sample / PANNS_SAMPLE_RATE
-                    raw_events.append((start_sec, end_sec, EVENT_LABEL_MAP[label_name]))
+                if label_name not in EVENT_LABEL_MAP:
+                    continue
+
+                threshold = (
+                    BREATHING_CONFIDENCE_THRESHOLD
+                    if label_name in BREATHING_LABELS
+                    else EVENT_CONFIDENCE_THRESHOLD
+                )
+                if prob < threshold:
+                    continue
+
+                start_sec = start_sample / PANNS_SAMPLE_RATE
+                end_sec = end_sample / PANNS_SAMPLE_RATE
+                raw_events.append((start_sec, end_sec, EVENT_LABEL_MAP[label_name]))
 
         # Merge consecutive/overlapping windows that share the same tag
         raw_events.sort(key=lambda e: e[0])
@@ -263,13 +275,26 @@ def merge_speech_and_events(segments, events):
 # ============================
 # 🎚️ AUDIO PROCESSING (noise handling)
 # ============================
-MIN_RMS_ENERGY = 60.0        # below this = treated as silence/background noise only
+MIN_RMS_ENERGY = 60.0        # absolute floor -- frames quieter than this are never speech
 MIN_DURATION_SECONDS = 0.8   # below this = too short, Whisper tends to hallucinate
 MAX_DURATION_SECONDS = 120   # cap so one very long clip doesn't slow everything down
 
-# Human speech mostly lives in this frequency band. Anything outside it
-# (low rumble from fans/AC/traffic, high hiss) is very unlikely to be voice.
-SPEECH_LOW_HZ = 600
+# --- Voice Activity Detection (VAD) settings ---
+# IMPORTANT: we check small frames individually instead of averaging energy
+# across the WHOLE clip. A long recording with silence...speech...silence
+# would get its real speech "diluted" by a whole-clip average and the
+# entire clip would get wrongly rejected. This was a recurring bug --
+# do not replace this with a single whole-buffer RMS check again.
+VAD_FRAME_MS = 30
+MIN_SPEECH_SECONDS = 0.3
+NOISE_FLOOR_PERCENTILE = 10
+SPEECH_ABOVE_NOISE_FACTOR = 2.5
+
+# FIXED: Human speech FUNDAMENTAL frequency lives around 85-255 Hz (85 for
+# low male voices up to ~255 for higher female voices), with harmonics
+# extending up to ~3400 Hz. A low cutoff of 600 Hz (as this file had)
+# strips out the fundamental entirely and badly weakens/muffles the voice.
+SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
 
 
@@ -279,7 +304,7 @@ def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEEC
     reaches the noise-reduction or transcription step."""
     nyquist = 0.5 * sample_rate
     low = low_hz / nyquist
-    high = min(high_hz / nyquist, 0.99)  # keep below Nyquist limit
+    high = min(high_hz / nyquist, 0.99)
     b, a = signal.butter(4, [low, high], btype="band")
     filtered = signal.filtfilt(b, a, audio_data.astype(np.float64))
     return filtered
@@ -287,12 +312,44 @@ def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEEC
 
 def normalize_audio(audio_data, target_peak=0.9):
     """Brings quiet recordings up to a consistent volume so a soft voice
-    isn't drowned out relative to noise. Scales based on peak amplitude."""
+    isn't drowned out relative to noise."""
     max_val = np.max(np.abs(audio_data))
     if max_val < 1e-6:
         return audio_data
     scale = (target_peak * 32767.0) / max_val
     return audio_data * scale
+
+
+def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
+    """Splits audio into short frames and returns the RMS energy of each."""
+    frame_len = max(1, int(sample_rate * frame_ms / 1000))
+    energies = []
+    for start in range(0, len(audio_data), frame_len):
+        chunk = audio_data[start:start + frame_len]
+        if len(chunk) == 0:
+            continue
+        energies.append(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
+    return energies
+
+
+def contains_real_speech(audio_data, sample_rate):
+    """
+    Frame-based check: does this clip contain enough speech-level audio,
+    REGARDLESS of how much silence surrounds it? A recording that is mostly
+    quiet with short bursts of talking still passes, because we look at
+    individual frames instead of one whole-clip average.
+    """
+    energies = frame_energies(audio_data, sample_rate)
+    if not energies:
+        return False
+
+    noise_floor = np.percentile(energies, NOISE_FLOOR_PERCENTILE)
+    dynamic_threshold = max(noise_floor * SPEECH_ABOVE_NOISE_FACTOR, MIN_RMS_ENERGY)
+
+    speech_frame_count = sum(1 for e in energies if e > dynamic_threshold)
+    speech_seconds = speech_frame_count * (VAD_FRAME_MS / 1000)
+
+    return speech_seconds >= MIN_SPEECH_SECONDS
 
 
 def process_audio_buffer(audio_bytes):
@@ -313,8 +370,8 @@ def process_audio_buffer(audio_bytes):
         if duration_seconds > MAX_DURATION_SECONDS:
             audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
 
-        rms_energy = np.sqrt(np.mean(audio_data.astype(np.float64) ** 2))
-        if rms_energy < MIN_RMS_ENERGY:
+        # FIXED: frame-based VAD instead of whole-clip average RMS
+        if not contains_real_speech(audio_data, sample_rate):
             return None
 
         raw_mono_audio = audio_data.copy()
@@ -323,8 +380,7 @@ def process_audio_buffer(audio_bytes):
         filtered_audio = bandpass_filter(audio_data, sample_rate)
 
         # 2) Non-stationary noise reduction: adapts to changing background
-        #    noise (traffic, chatter) instead of assuming a constant noise
-        #    floor like the default "stationary" mode does.
+        #    noise instead of assuming a constant noise floor.
         cleaned_audio_data = nr.reduce_noise(
             y=filtered_audio,
             sr=sample_rate,
@@ -377,8 +433,11 @@ if "last_transcription" not in st.session_state:
 
 st.subheader("🎤 Voice Input")
 
+# FIXED: this checkbox controls sound-event detection (coughing, laughing,
+# breathing tags) -- it does NOT start the recording. Mislabeling it as
+# "VOICE RECORDING HERE" would confuse anyone using the app.
 detect_events = st.checkbox(
-    "VOICE RECORDING HERE ↘️",
+    "😮 Detect sounds like coughing, laughing, breathing (adds tags like [breathing])",
     value=True,
     help="First use downloads a ~300MB model one time. Needs internet on this machine."
 )
@@ -425,7 +484,7 @@ if audio_output:
                 segments = getattr(transcription, "segments", None) or []
 
                 if detect_events:
-                    with st.spinner("😮 Checking for coughing, laughing, etc..."):
+                    with st.spinner("😮 Checking for coughing, laughing, breathing..."):
                         events = detect_sound_events(raw_mono_audio, sample_rate)
                 else:
                     events = []
@@ -433,8 +492,6 @@ if audio_output:
                 if segments:
                     text_from_voice = merge_speech_and_events(segments, events)
                 else:
-                    # Fallback: no segment timestamps available, just use
-                    # the plain transcript text with events listed after it.
                     raw_text = getattr(transcription, "text", "").strip()
                     text_from_voice = force_roman_script(raw_text)
                     if events:
