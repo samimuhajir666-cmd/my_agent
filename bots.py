@@ -297,6 +297,115 @@ SPEECH_ABOVE_NOISE_FACTOR = 2.5
 SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
 
+# --- "Ignore the person talking in the background" settings ---
+# We can't truly separate two overlapping voices with simple signal
+# processing (that needs a heavy source-separation model). What we CAN do
+# reliably: assume the admin is the one closer to the mic, so their voice
+# is louder. Any moment that's quiet relative to the loudest nearby voice
+# gets pulled down instead of removed outright (avoids harsh clicking).
+DOMINANCE_FRAME_MS = 100        # coarser than VAD frames -- smoother loudness envelope
+DOMINANCE_WINDOW_SECONDS = 1.5  # how far around each moment we look for "who's loudest nearby"
+DOMINANCE_RELATIVE_THRESHOLD = 0.45  # quieter than 45% of the loudest nearby voice = flagged as possible background
+DOMINANCE_ATTENUATION = 0.15    # background voice is turned down to 15% volume, not muted completely
+
+# --- Pitch-based rescue for the admin's own quiet moments ---
+# Loudness alone can't tell "admin talking softly" apart from "someone else
+# talking". Each person's voice has a fairly stable pitch (fundamental
+# frequency), so: find the admin's typical pitch from their loud moments,
+# and if a "quiet" frame has THAT SAME pitch, it's still the admin -- don't
+# suppress it. Only suppress quiet frames with a genuinely different pitch.
+PITCH_TOLERANCE_HZ = 30
+PITCH_FMIN = 75
+PITCH_FMAX = 400
+PITCH_HOP = 512  # librosa's own small internal hop for reliable pitch tracking
+
+
+def suppress_background_speaker(audio_data, sample_rate):
+    """
+    Heuristic dominant-speaker filter with a pitch-based safety net:
+    1) Flags quiet frames (relative to the loudest nearby moment) as
+       "possible background".
+    2) Estimates the admin's typical pitch from their loud frames.
+    3) Un-flags any quiet frame whose pitch matches the admin's pitch --
+       that's the admin talking softly, not someone else.
+    4) Only the remaining flagged frames (quiet AND different pitch) get
+       attenuated.
+
+    LIMITATION: pitch estimation isn't perfect on noisy/short audio, and
+    two people with very similar voices can still be confused. This is a
+    meaningful improvement over loudness alone, not a perfect fix.
+    """
+    frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
+    n_frames = int(np.ceil(len(audio_data) / frame_len))
+
+    frame_energy = np.zeros(n_frames)
+    for i in range(n_frames):
+        chunk = audio_data[i * frame_len:(i + 1) * frame_len]
+        if len(chunk) > 0:
+            frame_energy[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
+
+    window_frames = max(1, int(DOMINANCE_WINDOW_SECONDS * 1000 / DOMINANCE_FRAME_MS))
+    local_dominant = np.zeros(n_frames)
+    for i in range(n_frames):
+        start = max(0, i - window_frames // 2)
+        end = min(n_frames, i + window_frames // 2 + 1)
+        local_dominant[i] = np.max(frame_energy[start:end])
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        is_quiet = frame_energy < (DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
+
+    # --- Pitch-based rescue ---
+    try:
+        import librosa
+
+        audio_float = audio_data.astype(np.float32) / 32768.0
+        # NOTE: pyin's internal transition model breaks with large hop
+        # lengths, so we track pitch at a small hop (its own default-ish
+        # granularity) and then aggregate onto our coarser frames below.
+        f0_fine, _voiced_flag, _voiced_prob = librosa.pyin(
+            audio_float,
+            fmin=PITCH_FMIN,
+            fmax=PITCH_FMAX,
+            sr=sample_rate,
+            hop_length=PITCH_HOP,
+        )
+
+        fine_sample_positions = librosa.frames_to_samples(
+            np.arange(len(f0_fine)), hop_length=PITCH_HOP
+        )
+        f0 = np.full(n_frames, np.nan)
+        for i in range(n_frames):
+            frame_start = i * frame_len
+            frame_end = frame_start + frame_len
+            in_frame = (fine_sample_positions >= frame_start) & (fine_sample_positions < frame_end)
+            vals = f0_fine[in_frame]
+            vals = vals[~np.isnan(vals)]
+            if len(vals) > 0:
+                f0[i] = np.median(vals)
+
+        loud_mask = frame_energy >= np.percentile(frame_energy, 60)
+        admin_pitches = f0[loud_mask & ~np.isnan(f0)]
+
+        if len(admin_pitches) > 0:
+            admin_pitch = np.median(admin_pitches)
+            for i in range(n_frames):
+                if is_quiet[i] and not np.isnan(f0[i]):
+                    if abs(f0[i] - admin_pitch) <= PITCH_TOLERANCE_HZ:
+                        is_quiet[i] = False  # same voice, just quieter -- spare it
+    except Exception:
+        pass  # if pitch detection fails for any reason, fall back to loudness-only
+
+    gain = np.ones(n_frames)
+    gain[is_quiet] = DOMINANCE_ATTENUATION
+
+    output = audio_data.astype(np.float64).copy()
+    for i in range(n_frames):
+        start = i * frame_len
+        end = min(len(audio_data), start + frame_len)
+        output[start:end] *= gain[i]
+
+    return output.astype(audio_data.dtype)
+
 
 def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
     """Cuts frequencies outside the human speech range, removing a lot of
@@ -370,14 +479,19 @@ def process_audio_buffer(audio_bytes):
         if duration_seconds > MAX_DURATION_SECONDS:
             audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
 
-        # FIXED: frame-based VAD instead of whole-clip average RMS
-        if not contains_real_speech(audio_data, sample_rate):
+        # FIXED: frame-based VAD instead of whole-clip average RMS.
+        # Also apply background-speaker suppression FIRST so the VAD check
+        # (and everything downstream) is judging the admin's voice, not
+        # whoever else happens to be talking nearby.
+        focused_audio = suppress_background_speaker(audio_data, sample_rate)
+
+        if not contains_real_speech(focused_audio, sample_rate):
             return None
 
-        raw_mono_audio = audio_data.copy()
+        raw_mono_audio = focused_audio.copy()
 
         # 1) Keep only the frequency range where human speech lives
-        filtered_audio = bandpass_filter(audio_data, sample_rate)
+        filtered_audio = bandpass_filter(focused_audio, sample_rate)
 
         # 2) Non-stationary noise reduction: adapts to changing background
         #    noise instead of assuming a constant noise floor.
