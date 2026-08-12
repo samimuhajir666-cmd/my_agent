@@ -314,7 +314,7 @@ DOMINANCE_ATTENUATION = 0.15    # background voice is turned down to 15% volume,
 # frequency), so: find the admin's typical pitch from their loud moments,
 # and if a "quiet" frame has THAT SAME pitch, it's still the admin -- don't
 # suppress it. Only suppress quiet frames with a genuinely different pitch.
-PITCH_TOLERANCE_HZ = 30
+PITCH_TOLERANCE_HZ = 40
 PITCH_FMIN = 75
 PITCH_FMAX = 400
 PITCH_HOP = 512  # librosa's own small internal hop for reliable pitch tracking
@@ -322,18 +322,20 @@ PITCH_HOP = 512  # librosa's own small internal hop for reliable pitch tracking
 
 def suppress_background_speaker(audio_data, sample_rate):
     """
-    Heuristic dominant-speaker filter with a pitch-based safety net:
-    1) Flags quiet frames (relative to the loudest nearby moment) as
-       "possible background".
-    2) Estimates the admin's typical pitch from their loud frames.
-    3) Un-flags any quiet frame whose pitch matches the admin's pitch --
-       that's the admin talking softly, not someone else.
-    4) Only the remaining flagged frames (quiet AND different pitch) get
-       attenuated.
+    Pitch-first background speaker filter:
+    1) Estimates the admin's typical pitch (energy-weighted, so louder
+       moments count more toward "whose pitch is this").
+    2) ANY voiced frame whose pitch doesn't match the admin's pitch gets
+       attenuated -- REGARDLESS of how loud it is. This matters because a
+       background speaker on the same mic is often not much quieter than
+       the admin, so a loudness-only gate never even considers them.
+    3) For frames where pitch can't be detected (unvoiced sounds, breath,
+       near-silence), we fall back to the loudness-relative check, since
+       pitch can't help there.
 
-    LIMITATION: pitch estimation isn't perfect on noisy/short audio, and
-    two people with very similar voices can still be confused. This is a
-    meaningful improvement over loudness alone, not a perfect fix.
+    LIMITATION: if the admin and the background speaker have very similar
+    voice pitch, this still can't tell them apart -- that needs a proper
+    voice-identity model (the "enrollment" approach we skipped for speed).
     """
     frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
     n_frames = int(np.ceil(len(audio_data) / frame_len))
@@ -351,17 +353,14 @@ def suppress_background_speaker(audio_data, sample_rate):
         end = min(n_frames, i + window_frames // 2 + 1)
         local_dominant[i] = np.max(frame_energy[start:end])
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        is_quiet = frame_energy < (DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
+    is_background = np.zeros(n_frames, dtype=bool)
 
-    # --- Pitch-based rescue ---
+    # --- Pitch tracking ---
+    f0 = np.full(n_frames, np.nan)
     try:
         import librosa
 
         audio_float = audio_data.astype(np.float32) / 32768.0
-        # NOTE: pyin's internal transition model breaks with large hop
-        # lengths, so we track pitch at a small hop (its own default-ish
-        # granularity) and then aggregate onto our coarser frames below.
         f0_fine, _voiced_flag, _voiced_prob = librosa.pyin(
             audio_float,
             fmin=PITCH_FMIN,
@@ -369,11 +368,9 @@ def suppress_background_speaker(audio_data, sample_rate):
             sr=sample_rate,
             hop_length=PITCH_HOP,
         )
-
         fine_sample_positions = librosa.frames_to_samples(
             np.arange(len(f0_fine)), hop_length=PITCH_HOP
         )
-        f0 = np.full(n_frames, np.nan)
         for i in range(n_frames):
             frame_start = i * frame_len
             frame_end = frame_start + frame_len
@@ -382,21 +379,32 @@ def suppress_background_speaker(audio_data, sample_rate):
             vals = vals[~np.isnan(vals)]
             if len(vals) > 0:
                 f0[i] = np.median(vals)
-
-        loud_mask = frame_energy >= np.percentile(frame_energy, 60)
-        admin_pitches = f0[loud_mask & ~np.isnan(f0)]
-
-        if len(admin_pitches) > 0:
-            admin_pitch = np.median(admin_pitches)
-            for i in range(n_frames):
-                if is_quiet[i] and not np.isnan(f0[i]):
-                    if abs(f0[i] - admin_pitch) <= PITCH_TOLERANCE_HZ:
-                        is_quiet[i] = False  # same voice, just quieter -- spare it
     except Exception:
-        pass  # if pitch detection fails for any reason, fall back to loudness-only
+        pass  # pitch tracking failed entirely -- fall back to loudness-only below
+
+    voiced_mask = ~np.isnan(f0)
+
+    if voiced_mask.any():
+        # Admin pitch = energy-weighted: use the louder half of voiced
+        # frames as the reference, since the admin is usually closer/louder
+        # overall even if any single moment isn't dramatically so.
+        energy_cutoff = np.percentile(frame_energy[voiced_mask], 50)
+        reference_mask = voiced_mask & (frame_energy >= energy_cutoff)
+        reference_pitches = f0[reference_mask] if reference_mask.any() else f0[voiced_mask]
+        admin_pitch = np.median(reference_pitches)
+
+        # KEY FIX: pitch mismatch flags a frame as background REGARDLESS of
+        # loudness -- a loud background speaker no longer slips through.
+        pitch_mismatch = voiced_mask & (np.abs(f0 - admin_pitch) > PITCH_TOLERANCE_HZ)
+        is_background |= pitch_mismatch
+
+    # --- Loudness fallback for frames with no usable pitch (breaths, consonants, near-silence) ---
+    with np.errstate(divide="ignore", invalid="ignore"):
+        unvoiced_quiet = (~voiced_mask) & (frame_energy < DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
+    is_background |= unvoiced_quiet
 
     gain = np.ones(n_frames)
-    gain[is_quiet] = DOMINANCE_ATTENUATION
+    gain[is_background] = DOMINANCE_ATTENUATION
 
     output = audio_data.astype(np.float64).copy()
     for i in range(n_frames):
