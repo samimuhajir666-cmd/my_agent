@@ -25,7 +25,6 @@ if not STT_MODEL_KEY:
     except Exception:
         pass
 
-# SECURITY: never hardcode a real API key here.
 if not STT_MODEL_KEY:
     st.error("GROQ_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
@@ -41,9 +40,6 @@ except Exception as e:
 # ============================
 STT_MODEL = "whisper-large-v3-turbo"
 
-# Whisper's "prompt" field biases vocabulary/style -- it does NOT follow
-# instructions. Writing commands here risks Whisper literally transcribing
-# those words back as if they were spoken. Keep this as a natural example.
 SYSTEM_PROMPT = (
     "Transcribe the audio accurately. English and Roman Urdu text like: "
     "kya haal hai, main theek hoon, billing amount kitna hua, cash or card "
@@ -56,7 +52,6 @@ if len(SYSTEM_PROMPT) > 896:
     st.stop()
 
 
-# --- FORCE ROMAN SCRIPT (guarantee, doesn't rely on Whisper "obeying") ---
 def force_roman_script(text):
     """Any non-Latin character (Arabic, Urdu, Devanagari, etc.) gets
     converted to its closest Roman-letter form. Already-Roman text passes
@@ -70,16 +65,8 @@ def force_roman_script(text):
 
 
 # ============================
-# 😮 NON-SPEECH SOUND EVENT DETECTION (coughing, laughing, breathing, etc.)
+# 😮 NON-SPEECH SOUND EVENT DETECTION
 # ============================
-# Whisper only transcribes WORDS -- it has no concept of "coughing" or
-# "breathing". To caption those (like YouTube closed captions do), we run a
-# second, separate model: PANNs, trained on Google's AudioSet (527 sound
-# categories). This is a real audio classifier, not a language model, so
-# it can reliably recognize non-speech sounds.
-#
-# NOTE: first run downloads a ~300MB checkpoint automatically -- needs
-# normal internet access on whatever machine actually runs this app.
 EVENT_LABEL_MAP = {
     "cough": "[coughing]",
     "laughter": "[laughing]",
@@ -104,10 +91,6 @@ EVENT_LABEL_MAP = {
     "gasp": "[breathing]",
 }
 
-# Breathing is much quieter/subtler than coughing or laughing, so AudioSet
-# models give it lower confidence even when it's really there. We use a
-# separate, lower threshold just for it so normal breathing actually gets
-# caught instead of being ignored.
 EVENT_CONFIDENCE_THRESHOLD = 0.20
 BREATHING_CONFIDENCE_THRESHOLD = 0.12
 BREATHING_LABELS = {"breathing", "wheeze", "gasp"}
@@ -118,22 +101,14 @@ PANNS_SAMPLE_RATE = 32000
 
 @st.cache_resource(show_spinner=False)
 def load_sound_event_model():
-    """Loads the PANNs AudioSet tagging model once and caches it for the
-    life of the app process (not re-downloaded/reloaded on every recording)."""
+    """Loads the PANNs AudioSet tagging model once and caches it."""
     from panns_inference import AudioTagging
     return AudioTagging(checkpoint_path=None, device="cpu")
 
 
 def detect_sound_events(audio_data, sample_rate):
-    """
-    Runs the audio through PANNs in fixed windows and returns a list of
-    (start_seconds, end_seconds, tag) for any recognized non-speech event
-    that crosses the confidence threshold. Consecutive windows with the
-    same tag are merged into a single span.
-    Returns [] if the model can't be loaded (e.g. no internet for the
-    first-time download) -- event detection is a bonus, never blocks
-    transcription.
-    """
+    """Runs the audio through PANNs in fixed windows and returns a list of
+    (start_seconds, end_seconds, tag) for recognized non-speech events."""
     try:
         model = load_sound_event_model()
     except Exception:
@@ -152,7 +127,7 @@ def detect_sound_events(audio_data, sample_rate):
         window_len = int(EVENT_WINDOW_SECONDS * PANNS_SAMPLE_RATE)
         total_len = len(audio_float)
 
-        raw_events = []  # (start_sec, end_sec, tag)
+        raw_events = []
         for start_sample in range(0, total_len, window_len):
             end_sample = min(start_sample + window_len, total_len)
             chunk = audio_float[start_sample:end_sample]
@@ -203,30 +178,17 @@ AVG_LOGPROB_THRESHOLD = -1.0
 
 
 def is_likely_hallucinated(text, no_speech_prob, avg_logprob):
-    """
-    Whisper hallucinates stock phrases on unclear/weak audio because of its
-    training data (lots of YouTube outros). We catch this two ways:
-    1) Whisper's own confidence scores (no_speech_prob / avg_logprob).
-    2) A fallback blocklist of common hallucinated phrases.
-    """
     cleaned = text.strip().lower()
-
     if no_speech_prob is not None and no_speech_prob > NO_SPEECH_PROB_THRESHOLD:
         return True
     if avg_logprob is not None and avg_logprob < AVG_LOGPROB_THRESHOLD:
         return True
     if cleaned in HALLUCINATION_PHRASES:
         return True
-
     return False
 
 
 def merge_speech_and_events(segments, events):
-    """
-    Combines Whisper's speech segments and detected non-speech events into
-    one chronological, readable string. Likely-hallucinated segments are
-    dropped using Whisper's own confidence signals.
-    """
     items = []
     for seg in segments:
         seg_start = getattr(seg, "start", None)
@@ -263,54 +225,38 @@ def merge_speech_and_events(segments, events):
 
 
 # ============================
-# 🎚️ AUDIO PROCESSING (noise handling)
+# 🎚️ AUDIO PROCESSING & BACKGROUND FILTERING
 # ============================
 MIN_RMS_ENERGY = 60.0
 MIN_DURATION_SECONDS = 0.8
 MAX_DURATION_SECONDS = 120
 
-# --- Voice Activity Detection (VAD) settings ---
-# We check small frames individually instead of averaging energy across the
-# WHOLE clip -- a long recording with silence...speech...silence would get
-# its real speech "diluted" by a whole-clip average and wrongly rejected.
 VAD_FRAME_MS = 30
 MIN_SPEECH_SECONDS = 0.3
 NOISE_FLOOR_PERCENTILE = 10
 SPEECH_ABOVE_NOISE_FACTOR = 2.5
 
-# Human speech FUNDAMENTAL frequency lives around 85-255 Hz, with harmonics
-# extending up to ~3400 Hz.
 SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
 
-# --- "Ignore the person talking in the background" settings ---
-DOMINANCE_FRAME_MS = 100
-DOMINANCE_WINDOW_SECONDS = 1.5
-DOMINANCE_RELATIVE_THRESHOLD = 0.45
-DOMINANCE_ATTENUATION = 0.15
+# --- Advanced Human-like Cocktail Filtering Tuned Configurations ---
+DOMINANCE_FRAME_MS = 80             # Smaller frame window size for quick reaction response
+DOMINANCE_WINDOW_SECONDS = 1.0       # Tight tracking scale for dynamic spikes
+DOMINANCE_RELATIVE_THRESHOLD = 0.55  # Increased strict safety margin to separate target speaker from background
+DOMINANCE_ATTENUATION = 0.05         # Heavy suppression factor (Drops background speakers down to near-silent 5%)
 
 # --- Pitch-based speaker identification ---
-PITCH_TOLERANCE_HZ = 40
+PITCH_TOLERANCE_HZ = 30              # Stricter frequency windowing to exclude outlier voice steps
 PITCH_FMIN = 75
-PITCH_FMAX = 400
+PITCH_FMAX = 300                     # Capped to reject higher pitch side chatter directly
 PITCH_HOP = 512
 
 
 def suppress_background_speaker(audio_data, sample_rate):
     """
     Pitch-first background speaker filter:
-    1) Estimates the admin's typical pitch (energy-weighted, so louder
-       moments count more toward "whose pitch is this").
-    2) ANY voiced frame whose pitch doesn't match the admin's pitch gets
-       attenuated -- REGARDLESS of how loud it is. A background speaker on
-       the same mic is often not much quieter than the admin, so a
-       loudness-only gate never even considers them.
-    3) For frames where pitch can't be detected (unvoiced sounds, breath,
-       near-silence), fall back to the loudness-relative check.
-
-    LIMITATION: if the admin and the background speaker have very similar
-    voice pitch, this still can't tell them apart -- that needs a proper
-    voice-identity model.
+    Estimates primary speaker frequency metrics and actively clamps mismatched audio levels
+    to create a clean, prioritized spatial audio path.
     """
     frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
     n_frames = int(np.ceil(len(audio_data) / frame_len))
@@ -384,8 +330,6 @@ def suppress_background_speaker(audio_data, sample_rate):
 
 
 def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
-    """Cuts frequencies outside the human speech range, removing a lot of
-    non-voice background noise (fans, traffic rumble, hiss)."""
     nyquist = 0.5 * sample_rate
     low = low_hz / nyquist
     high = min(high_hz / nyquist, 0.99)
@@ -395,7 +339,6 @@ def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEEC
 
 
 def normalize_audio(audio_data, target_peak=0.9):
-    """Brings quiet recordings up to a consistent volume."""
     max_val = np.max(np.abs(audio_data))
     if max_val < 1e-6:
         return audio_data
@@ -404,7 +347,6 @@ def normalize_audio(audio_data, target_peak=0.9):
 
 
 def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
-    """Splits audio into short frames and returns the RMS energy of each."""
     frame_len = max(1, int(sample_rate * frame_ms / 1000))
     energies = []
     for start in range(0, len(audio_data), frame_len):
@@ -416,10 +358,6 @@ def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
 
 
 def contains_real_speech(audio_data, sample_rate):
-    """
-    Frame-based check: does this clip contain enough speech-level audio,
-    REGARDLESS of how much silence surrounds it?
-    """
     energies = frame_energies(audio_data, sample_rate)
     if not energies:
         return False
@@ -434,8 +372,6 @@ def contains_real_speech(audio_data, sample_rate):
 
 
 def process_audio_buffer(audio_bytes):
-    """Returns (transcription_ready_bytes, raw_mono_audio, sample_rate), or
-    None if the clip is silence/noise/too short."""
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
@@ -455,7 +391,6 @@ def process_audio_buffer(audio_bytes):
             return None
 
         raw_mono_audio = focused_audio.copy()
-
         filtered_audio = bandpass_filter(focused_audio, sample_rate)
 
         cleaned_audio_data = nr.reduce_noise(
