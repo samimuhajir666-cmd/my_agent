@@ -227,7 +227,7 @@ def merge_speech_and_events(segments, events):
 
 
 # ============================
-# 🎚️ AUDIO PROCESSING & BACKGROUND FILTERING
+# 🎚️ AUDIO PROCESSING & CONFIGS
 # ============================
 MIN_RMS_ENERGY = 60.0
 MIN_DURATION_SECONDS = 0.8
@@ -241,25 +241,19 @@ SPEECH_ABOVE_NOISE_FACTOR = 2.5
 SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
 
-# --- Advanced Audio Cocktail Isolation Configurations ---
-DOMINANCE_FRAME_MS = 40             # Shorter frame window for high precision tracking
-DOMINANCE_WINDOW_SECONDS = 0.6       # Tight running window to capture structural speech changes
-DOMINANCE_RELATIVE_THRESHOLD = 0.65  # Increased barrier to safely identify lower-level background voices
-DOMINANCE_ATTENUATION = 0.02         # Stronger suppression factor (drops background bleed to 2% volume)
+DOMINANCE_FRAME_MS = 40             
+DOMINANCE_WINDOW_SECONDS = 0.6       
+DOMINANCE_ATTENUATION = 0.02         
 
-# --- Enhanced Pitch & Confidence Filters ---
-PITCH_TOLERANCE_HZ = 25              # Stricter frequency deviation tracking
+PITCH_TOLERANCE_HZ = 25              
 PITCH_FMIN = 75
-PITCH_FMAX = 280                     # Filter top limits to intercept distant background speech pitches
+PITCH_FMAX = 280                     
 PITCH_HOP = 512
-MIN_VOICED_PROBABILITY = 0.45        # Rejects low-confidence harmonic background whispers
 
 
-def suppress_background_speaker(audio_data, sample_rate):
+def suppress_background_speaker(audio_data, sample_rate, bg_threshold, voiced_prob_threshold):
     """
-    Upgraded voice-dominant spatial filter. Combines running energy matrices 
-    with pitch matching metrics and probability verification weights to track 
-    the active foreground user while neutralizing secondary background voices.
+    Upgraded voice-dominant spatial filter with dynamic sliders for live adjustments.
     """
     frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
     n_frames = int(np.ceil(len(audio_data) / frame_len))
@@ -303,8 +297,8 @@ def suppress_background_speaker(audio_data, sample_rate):
             vals = f0_fine[in_frame]
             probs = voiced_prob[in_frame]
             
-            # Filter tracks based on voiced confidence score thresholds
-            valid_mask = (~np.isnan(vals)) & (probs >= MIN_VOICED_PROBABILITY)
+            # Using custom slider value for voice confidence matching
+            valid_mask = (~np.isnan(vals)) & (probs >= voiced_prob_threshold)
             valid_vals = vals[valid_mask]
             
             if len(valid_vals) > 0:
@@ -320,19 +314,17 @@ def suppress_background_speaker(audio_data, sample_rate):
         reference_pitches = f0[reference_mask] if reference_mask.any() else f0[voiced_mask]
         admin_pitch = np.median(reference_pitches)
 
-        # Flag frequencies deviating from target user metrics
         pitch_mismatch = voiced_mask & (np.abs(f0 - admin_pitch) > PITCH_TOLERANCE_HZ)
         is_background |= pitch_mismatch
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        unvoiced_quiet = (frame_energy < DOMINANCE_RELATIVE_THRESHOLD * local_dominant)
+        # Using custom background cutoff slider threshold
+        unvoiced_quiet = (frame_energy < bg_threshold * local_dominant)
     is_background |= unvoiced_quiet
 
-    # Create smooth gain transitions to maintain natural audio curves
     gain = np.ones(n_frames)
     gain[is_background] = DOMINANCE_ATTENUATION
 
-    # Smooth the gain transition array using a windowed filter
     if len(gain) > 5:
         smoothing_window = signal.windows.hamming(5)
         smoothing_window /= np.sum(smoothing_window)
@@ -390,7 +382,7 @@ def contains_real_speech(audio_data, sample_rate):
     return speech_seconds >= MIN_SPEECH_SECONDS
 
 
-def process_audio_buffer(audio_bytes):
+def process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold):
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
@@ -404,7 +396,8 @@ def process_audio_buffer(audio_bytes):
         if duration_seconds > MAX_DURATION_SECONDS:
             audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
 
-        focused_audio = suppress_background_speaker(audio_data, sample_rate)
+        # Pass active UI tuning parameters to the main function
+        focused_audio = suppress_background_speaker(audio_data, sample_rate, bg_threshold, voiced_prob_threshold)
 
         if not contains_real_speech(focused_audio, sample_rate):
             return None
@@ -461,6 +454,18 @@ load_html("index.html")
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
 
+# --- 🎛️ NEW: DYNAMIC AUDIO TUNING PANEL ---
+st.subheader("🎛️ Audio Cocktail Filter Controls")
+with st.expander("Fine-tune Background Voice Suppression Settings", expanded=True):
+    bg_threshold = st.slider(
+        "Background Cutoff Threshold (Higher = Suppresses louder background noises/voices)", 
+        min_value=0.1, max_value=0.95, value=0.65, step=0.05
+    )
+    voiced_prob_threshold = st.slider(
+        "Voice Confidence Filter (Higher = Rejects weak/faint human harmonics)", 
+        min_value=0.1, max_value=0.9, value=0.45, step=0.05
+    )
+
 st.subheader("🎤 Voice Input")
 
 detect_events = st.checkbox(
@@ -488,10 +493,11 @@ if audio_output:
         st.stop()
 
     with st.spinner("⏳ Processing sound..."):
-        result = process_audio_buffer(audio_bytes)
+        # Pass slider updates directly into processing queue
+        result = process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold)
 
     if result is None:
-        st.warning("⚠️ Noise, silence, or clip too short. Please speak clearly into the mic.")
+        st.warning("⚠️ Noise, silence, or clip too short. Please adjust sliders or speak closer to the mic.")
     else:
         processed_bytes, raw_mono_audio, sample_rate = result
 
