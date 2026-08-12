@@ -1,10 +1,16 @@
 # Core app
 streamlit>=1.30.0
-openai>=1.50.0
+groq>=0.4.0
 python-dotenv>=1.0.0
 
-# Audio recording + basic handling
+# Audio recording + processing
 streamlit-mic-recorder>=0.0.4
 numpy
 scipy
+noisereduce
 Unidecode
+
+# Sound event detection (coughing, laughing, breathing, etc.)
+torch
+librosa
+panns-inference
