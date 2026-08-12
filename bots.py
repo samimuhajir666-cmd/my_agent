@@ -45,6 +45,9 @@ SYSTEM_PROMPT = (
     "kya haal hai, main theek hoon, billing amount kitna hua, cash or card "
     "payment failed status code 500 transaction approved number 1 2 3 "
     "plus minus."
+    "if you don,t listen correct voice don,t say anything else . until you understand well "
+    "listen correctly generate text correctly"
+    "scan your admin user voise does,t metter week or strong listen clearly"
 )
 
 if len(SYSTEM_PROMPT) > 896:
