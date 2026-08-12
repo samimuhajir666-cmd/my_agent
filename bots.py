@@ -559,7 +559,7 @@ st.subheader("🎤 Voice Input")
 # breathing tags) -- it does NOT start the recording. Mislabeling it as
 # "VOICE RECORDING HERE" would confuse anyone using the app.
 detect_events = st.checkbox(
-    "😮 Detect sounds like coughing, laughing, breathing (adds tags like [breathing])",
+    "VOICE DETECTOR",
     value=True,
     help="First use downloads a ~300MB model one time. Needs internet on this machine."
 )
