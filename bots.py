@@ -201,7 +201,7 @@ HALLUCINATION_PHRASES = {
     "i'm going.", "i'm going here", "see you next time", "thank you very much",
     "thank you so much", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
 }
-NO_SPEECH_PROB_THRESHOLD = 0.6   # above this, Whisper itself thinks there was no real speech
+NO_SPEECH_PROB_THRESHOLD = 0.5  # above this, Whisper itself thinks there was no real speech
 AVG_LOGPROB_THRESHOLD = -1.0     # below this, Whisper's own confidence in its words is low
 
 
@@ -276,7 +276,7 @@ def merge_speech_and_events(segments, events):
 # 🎚️ AUDIO PROCESSING (noise handling)
 # ============================
 MIN_RMS_ENERGY = 60.0        # absolute floor -- frames quieter than this are never speech
-MIN_DURATION_SECONDS = 0.8   # below this = too short, Whisper tends to hallucinate
+MIN_DURATION_SECONDS = 2  # below this = too short, Whisper tends to hallucinate
 MAX_DURATION_SECONDS = 120   # cap so one very long clip doesn't slow everything down
 
 # --- Voice Activity Detection (VAD) settings ---
@@ -294,8 +294,8 @@ SPEECH_ABOVE_NOISE_FACTOR = 2.5
 # low male voices up to ~255 for higher female voices), with harmonics
 # extending up to ~3400 Hz. A low cutoff of 600 Hz (as this file had)
 # strips out the fundamental entirely and badly weakens/muffles the voice.
-SPEECH_LOW_HZ = 85
-SPEECH_HIGH_HZ = 3400
+SPEECH_LOW_HZ = 50
+SPEECH_HIGH_HZ = 3600
 
 # --- "Ignore the person talking in the background" settings ---
 # We can't truly separate two overlapping voices with simple signal
@@ -305,8 +305,8 @@ SPEECH_HIGH_HZ = 3400
 # gets pulled down instead of removed outright (avoids harsh clicking).
 DOMINANCE_FRAME_MS = 100        # coarser than VAD frames -- smoother loudness envelope
 DOMINANCE_WINDOW_SECONDS = 1.5  # how far around each moment we look for "who's loudest nearby"
-DOMINANCE_RELATIVE_THRESHOLD = 0.45  # quieter than 45% of the loudest nearby voice = flagged as possible background
-DOMINANCE_ATTENUATION = 0.15    # background voice is turned down to 15% volume, not muted completely
+DOMINANCE_RELATIVE_THRESHOLD = 0.66  # quieter than 45% of the loudest nearby voice = flagged as possible background
+DOMINANCE_ATTENUATION = 0.67   # background voice is turned down to 15% volume, not muted completely
 
 # --- Pitch-based rescue for the admin's own quiet moments ---
 # Loudness alone can't tell "admin talking softly" apart from "someone else
@@ -317,7 +317,7 @@ DOMINANCE_ATTENUATION = 0.15    # background voice is turned down to 15% volume,
 PITCH_TOLERANCE_HZ = 40
 PITCH_FMIN = 75
 PITCH_FMAX = 400
-PITCH_HOP = 512  # librosa's own small internal hop for reliable pitch tracking
+PITCH_HOP = 600 # librosa's own small internal hop for reliable pitch tracking
 
 
 def suppress_background_speaker(audio_data, sample_rate):
@@ -419,21 +419,21 @@ def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEEC
     """Cuts frequencies outside the human speech range, removing a lot of
     non-voice background noise (fans, traffic rumble, hiss) before it ever
     reaches the noise-reduction or transcription step."""
-    nyquist = 0.5 * sample_rate
+    nyquist = 0.8 * sample_rate
     low = low_hz / nyquist
-    high = min(high_hz / nyquist, 0.99)
+    high = min(high_hz / nyquist, 1.00)
     b, a = signal.butter(4, [low, high], btype="band")
     filtered = signal.filtfilt(b, a, audio_data.astype(np.float64))
     return filtered
 
 
-def normalize_audio(audio_data, target_peak=0.9):
+def normalize_audio(audio_data, target_peak=1.0):
     """Brings quiet recordings up to a consistent volume so a soft voice
     isn't drowned out relative to noise."""
     max_val = np.max(np.abs(audio_data))
     if max_val < 1e-6:
         return audio_data
-    scale = (target_peak * 32767.0) / max_val
+    scale = (target_peak * 3500.0) / max_val
     return audio_data * scale
 
 
@@ -600,7 +600,7 @@ if audio_output:
                     model=STT_MODEL,
                     prompt=SYSTEM_PROMPT,
                     response_format="verbose_json",
-                    temperature=0.0
+                    temperature=0.5
                 )
 
                 segments = getattr(transcription, "segments", None) or []
