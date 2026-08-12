@@ -425,8 +425,6 @@ def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
