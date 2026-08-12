@@ -48,7 +48,7 @@ SYSTEM_PROMPT = (
     "if you don,t listen correct voice never say anything as you wrong haring . until you understand well "
     "listen correctly generate text correctly"
     "scan your admin user voise does,nt metter week or strong listen clearly"
-    "
+    
 )
 
 if len(SYSTEM_PROMPT) > 896:
