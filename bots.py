@@ -9,30 +9,13 @@ import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
+from deepgram import DeepgramClient, PrerecordedOptions
 
 load_dotenv()
 
 # ============================
-# 🔑 API KEY INITIALIZATION
+# 🔑 DEEPGRAM API KEY INITIALIZATION
 # ============================
-STT_MODEL_KEY = os.getenv("DEEPGRAM_API_KEY")
-if not STT_MODEL_KEY:
-    try:
-        if "DEEPGRAM_API_KEY" in st.secrets:
-            STT_MODEL_KEY = st.secrets["DEEPGRAM_API_KEY"]
-    except Exception:
-        pass
-
-if not STT_MODEL_KEY:
-    st.error("DEEPGRAM_API_KEY not found. Please set it in .env or Streamlit Secrets.")
-    st.stop()
-
-try:
-    client = Groq(api_key=STT_MODEL_KEY)
-except Exception as e:
-    st.error(f"Could not initialize Groq client: {e}")
-    st.stop()
-
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 if not DEEPGRAM_API_KEY:
     try:
@@ -41,28 +24,21 @@ if not DEEPGRAM_API_KEY:
     except Exception:
         pass
 
-deepgram_client = None
-if DEEPGRAM_API_KEY:
-    try:
-        deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
-    except Exception as e:
-        st.warning(f"Deepgram client failed to initialize: {e}")
+if not DEEPGRAM_API_KEY:
+    st.error("DEEPGRAM_API_KEY not found. Please set it in .env or Streamlit Secrets.")
+    st.stop()
 
-# ============================
-# 🎯 MODEL & PROMPT
-# ============================
-STT_MODEL = "nova-3"
+try:
+    deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
+except Exception as e:
+    st.error(f"Deepgram client failed to initialize: {e}")
+    st.stop()
 
 SYSTEM_PROMPT = (
     "Roman Urdu and English mixed conversation. Common words: kya haal hai, "
     "main theek hoon, billing amount kitna hua, cash or card, payment failed, "
     "status code 500, transaction approved, number 1 2 3, plus minus."
 )
-
-if len(SYSTEM_PROMPT) > 896:
-    st.error("SYSTEM_PROMPT exceeds character limit.")
-    st.stop()
-
 
 def force_roman_script(text):
     if not text:
@@ -71,7 +47,6 @@ def force_roman_script(text):
     if not has_non_ascii:
         return text
     return unidecode(text)
-
 
 # ============================
 # 😮 NON-SPEECH SOUND EVENT DETECTION
@@ -107,12 +82,10 @@ BREATHING_LABELS = {"breathing", "wheeze", "gasp"}
 EVENT_WINDOW_SECONDS = 1.5
 PANNS_SAMPLE_RATE = 32000
 
-
 @st.cache_resource(show_spinner=False)
 def load_sound_event_model():
     from panns_inference import AudioTagging
     return AudioTagging(checkpoint_path=None, device="cpu")
-
 
 def detect_sound_events(audio_data, sample_rate):
     try:
@@ -172,31 +145,11 @@ def detect_sound_events(audio_data, sample_rate):
     except Exception:
         return []
 
-
-HALLUCINATION_FRAGMENTS = {
-    "thank you", "thanks for watching", "please subscribe", "subscribe",
-    "bye bye", "i'm going", "see you next time", "shukriya", "theek hai",
-}
-HALLUCINATION_PHRASES = {
-    "bye", "bye.", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
-    "acha", "ji",
-}
-NO_SPEECH_PROB_THRESHOLD = 0.6
-AVG_LOGPROB_THRESHOLD = -1.0
-
-
-def is_likely_hallucinated(text, no_speech_prob, avg_logprob):
-    cleaned = text.strip().lower()
-    if no_speech_prob is not None and no_speech_prob > NO_SPEECH_PROB_THRESHOLD:
-        return True
-    if avg_logprob is not None and avg_logprob < AVG_LOGPROB_THRESHOLD:
-        return True
-    if cleaned in HALLUCINATION_PHRASES:
-        return True
-    if any(fragment in cleaned for fragment in HALLUCINATION_FRAGMENTS):
-        return True
-    return False
-
+# ============================
+# 🎙️ DEEPGRAM TRANSCRIBE
+# ============================
+DEEPGRAM_MODEL = "nova-3"
+DEEPGRAM_CONFIDENCE_THRESHOLD = 0.55
 
 def segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
     if seg_start is None or seg_end is None:
@@ -211,50 +164,6 @@ def segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
         return False
     return max(energies) > MIN_RMS_ENERGY
 
-
-def merge_speech_and_events(segments, events, audio_data=None, sample_rate=None):
-    items = []
-    for seg in segments:
-        seg_start = getattr(seg, "start", None)
-        seg_end = getattr(seg, "end", None)
-        seg_text = getattr(seg, "text", None)
-        no_speech_prob = getattr(seg, "no_speech_prob", None)
-        avg_logprob = getattr(seg, "avg_logprob", None)
-        if seg_start is None and isinstance(seg, dict):
-            seg_start = seg.get("start")
-            seg_end = seg.get("end")
-            seg_text = seg.get("text")
-            no_speech_prob = seg.get("no_speech_prob")
-            avg_logprob = seg.get("avg_logprob")
-
-        if not seg_text:
-            continue
-        if is_likely_hallucinated(seg_text, no_speech_prob, avg_logprob):
-            continue
-        if audio_data is not None and sample_rate is not None:
-            if not segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
-                continue
-
-        items.append((seg_start or 0.0, seg_end or 0.0, force_roman_script(seg_text.strip())))
-
-    for start_sec, end_sec, tag in events:
-        items.append((start_sec, end_sec, tag))
-
-    items.sort(key=lambda x: x[0])
-
-    parts = []
-    for _, _, text in items:
-        if parts and parts[-1] == text:
-            continue
-        parts.append(text)
-
-    return " ".join(parts).strip()
-
-
-DEEPGRAM_MODEL = "nova-3"
-DEEPGRAM_CONFIDENCE_THRESHOLD = 0.55
-
-
 def transcribe_with_deepgram(processed_bytes, raw_mono_audio, sample_rate, events):
     options = PrerecordedOptions(
         model=DEEPGRAM_MODEL,
@@ -264,7 +173,6 @@ def transcribe_with_deepgram(processed_bytes, raw_mono_audio, sample_rate, event
         language="multi",
     )
     
-    # ✅ Fixed Deepgram SDK call syntax
     payload = {"buffer": processed_bytes, "mimetype": "audio/wav"}
     response = deepgram_client.listen.rest.v("1").transcribe_file(payload, options)
 
@@ -304,7 +212,6 @@ def transcribe_with_deepgram(processed_bytes, raw_mono_audio, sample_rate, event
 
     return " ".join(parts).strip()
 
-
 # ============================
 # 🎚️ AUDIO PROCESSING & CONFIGS
 # ============================
@@ -322,15 +229,12 @@ DOMINANT_FRAME_MS = 100
 DOMINANT_WINDOW_SECONDS = 2.0
 DOMINANT_MIN_GAIN = 0.30
 
-
 def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
     nyquist = 0.5 * sample_rate
     low = low_hz / nyquist
     high = min(high_hz / nyquist, 0.99)
     b, a = signal.butter(4, [low, high], btype="band")
-    filtered = signal.filtfilt(b, a, audio_data.astype(np.float64))
-    return filtered
-
+    return signal.filtfilt(b, a, audio_data.astype(np.float64))
 
 def attenuate_background_speakers(audio_data, sample_rate, sensitivity):
     frame_len = max(1, int(sample_rate * DOMINANT_FRAME_MS / 1000))
@@ -356,7 +260,6 @@ def attenuate_background_speakers(audio_data, sample_rate, sensitivity):
     gain[quieter_than_dominant] = DOMINANT_MIN_GAIN
 
     if len(gain) > 5:
-        # ✅ Fixed SciPy window call
         smoothing_window = signal.get_window('hamming', 5)
         smoothing_window /= np.sum(smoothing_window)
         gain = signal.convolve(gain, smoothing_window, mode='same')
@@ -370,14 +273,12 @@ def attenuate_background_speakers(audio_data, sample_rate, sensitivity):
 
     return output.astype(audio_data.dtype)
 
-
 def normalize_audio(audio_data, target_peak=0.9):
     max_val = np.max(np.abs(audio_data))
     if max_val < 1e-6:
         return audio_data
     scale = (target_peak * 32767.0) / max_val
     return audio_data * scale
-
 
 def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
     frame_len = max(1, int(sample_rate * frame_ms / 1000))
@@ -388,7 +289,6 @@ def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
             continue
         energies.append(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
     return energies
-
 
 def contains_real_speech(audio_data, sample_rate):
     energies = frame_energies(audio_data, sample_rate)
@@ -402,7 +302,6 @@ def contains_real_speech(audio_data, sample_rate):
     speech_seconds = speech_frame_count * (VAD_FRAME_MS / 1000)
 
     return speech_seconds >= MIN_SPEECH_SECONDS
-
 
 def process_audio_buffer(audio_bytes, sensitivity, debug=False):
     try:
@@ -448,7 +347,6 @@ def process_audio_buffer(audio_bytes, sensitivity, debug=False):
             st.exception(e)
         return None
 
-
 # ============================
 # 🖥️ STREAMLIT UI
 # ============================
@@ -458,12 +356,10 @@ st.set_page_config(
     layout="centered"
 )
 
-
 def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
 
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
@@ -472,7 +368,6 @@ def load_html(file_path="index.html"):
                 st.html(f.read())
             except Exception:
                 st.markdown(f.read(), unsafe_allow_html=True)
-
 
 load_css("style.css")
 load_html("index.html")
@@ -488,15 +383,6 @@ bg_sensitivity = st.slider(
 )
 
 debug_mode = st.checkbox("🐞 Show real errors (debug mode)", value=False)
-
-stt_engine_options = ["Groq (Whisper)"]
-if deepgram_client:
-    stt_engine_options.append("Deepgram (Nova-3)")
-
-stt_engine = st.selectbox("STT Engine", stt_engine_options)
-
-if not deepgram_client:
-    st.caption("Add DEEPGRAM_API_KEY to .env or Streamlit Secrets to enable Deepgram.")
 
 st.subheader("🎤 Voice Input")
 
@@ -532,7 +418,7 @@ if audio_output:
     else:
         processed_bytes, raw_mono_audio, sample_rate = result
 
-        with st.spinner("⚡ Transcribing speech..."):
+        with st.spinner("⚡ Transcribing speech with Deepgram..."):
             try:
                 if detect_events:
                     with st.spinner("😮 Checking for coughing, laughing, breathing..."):
@@ -540,31 +426,9 @@ if audio_output:
                 else:
                     events = []
 
-                if stt_engine == "Deepgram (Nova-3)":
-                    text_from_voice = transcribe_with_deepgram(
-                        processed_bytes, raw_mono_audio, sample_rate, events
-                    )
-                else:
-                    audio_file = io.BytesIO(processed_bytes)
-                    audio_file.name = "recording.wav"
-
-                    transcription = client.audio.transcriptions.create(
-                        file=audio_file,
-                        model=STT_MODEL,
-                        prompt=SYSTEM_PROMPT,
-                        response_format="verbose_json",
-                        temperature=0.0
-                    )
-
-                    segments = getattr(transcription, "segments", None) or []
-                    if segments:
-                        text_from_voice = merge_speech_and_events(segments, events, raw_mono_audio, sample_rate)
-                    else:
-                        raw_text = getattr(transcription, "text", "").strip()
-                        text_from_voice = force_roman_script(raw_text)
-                        if events:
-                            tags = " ".join(sorted(set(tag for _, _, tag in events)))
-                            text_from_voice = f"{text_from_voice} {tags}".strip()
+                text_from_voice = transcribe_with_deepgram(
+                    processed_bytes, raw_mono_audio, sample_rate, events
+                )
 
                 if text_from_voice and len(text_from_voice) > 1:
                     st.session_state.last_transcription = text_from_voice
