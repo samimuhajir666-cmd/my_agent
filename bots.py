@@ -40,13 +40,15 @@ if not DEEPGRAM_API_KEY:
 # FIXED: Dynamic initialization based on SDK Version
 try:
     if DEEPGRAM_V3:
-        deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
+        try:
+            deepgram_client = DeepgramClient(api_key=DEEPGRAM_API_KEY)
+        except TypeError:
+            deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
     else:
         deepgram_client = Deepgram(DEEPGRAM_API_KEY)
 except Exception as e:
     st.error(f"Deepgram client failed to initialize: {e}")
     st.stop()
-
 SYSTEM_PROMPT = (
     "Roman Urdu and English mixed conversation. Common words: kya haal hai, "
     "main theek hoon, billing amount kitna hua, cash or card, payment failed, "
