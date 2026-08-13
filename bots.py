@@ -14,15 +14,15 @@ load_dotenv()
 # ============================
 # 🔑 API KEY INITIALIZATION
 # ============================
-STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
+STT_MODEL_KEY = os.getenv("DEEPGRAM_API_KEY")
 if not STT_MODEL_KEY:
     try:
-        if "GROQ_API_KEY" in st.secrets:
-            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
+        if "DEEPGRAM_API_KEY" in st.secrets:
+            STT_MODEL_KEY = st.secrets["DEEPGRAM_API_KEY"]
     except Exception:
         pass
 if not STT_MODEL_KEY:
-    st.error("GROQ_API_KEY not found. Please set it in .env or Streamlit Secrets.")
+    st.error("DEEPGRAM_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
 try:
     client = Groq(api_key=STT_MODEL_KEY)
@@ -32,7 +32,7 @@ except Exception as e:
 # ============================
 # 🎯 MODEL & PROMPT
 # ============================
-STT_MODEL = "whisper-large-v3-turbo"
+STT_MODEL = "nova-3"
 # FIX #5: The Whisper `prompt` param is NOT an instruction channel — the model
 # does not reliably "obey" directives like "do not transcribe anything."
 # It only biases vocabulary/spelling toward the words you give it. Keep it
