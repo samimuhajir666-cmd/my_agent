@@ -16,37 +16,6 @@ from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
 
 
-# ============================================================
-# 🎤 LISTENER - FULL SPEECH TO TEXT AGENT
-# ============================================================
-#
-# Pipeline:
-#
-# Microphone
-#     ↓
-# Original WAV
-#     ↓
-# Audio validation
-#     ↓
-# Optional audio enhancement
-#     ↓
-# Deepgram Nova-3
-#     ↓
-# Roman Urdu / English text
-#     ↓
-# Optional sound-event tags
-#
-# IMPORTANT:
-# Deepgram SDK is NOT used.
-# We use Deepgram's HTTP API directly.
-#
-# This avoids SDK v2/v3 compatibility problems.
-# ============================================================
-
-
-# ============================================================
-# 1. STREAMLIT PAGE CONFIG
-# ============================================================
 
 st.set_page_config(
     page_title="LISTENER - Speech to Text",
@@ -90,11 +59,6 @@ if not DEEPGRAM_API_KEY:
 
     st.stop()
 
-
-# ============================================================
-# 4. DEEPGRAM CONFIGURATION
-# ============================================================
-
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 DEEPGRAM_MODEL = "nova-3"
@@ -119,6 +83,7 @@ SYSTEM_PROMPT = (
     "Keep names, numbers, Python terms and technical "
     "words accurate. Do not answer questions. "
     "Only transcribe what was spoken."
+    "don,t wrong guesses guess as user say and listen as possible as clear ".
 )
 
 
@@ -1378,97 +1343,6 @@ def merge_transcription_and_events(
 
 
 # ============================================================
-# 19. LOAD CSS
-# ============================================================
-
-def load_css(
-    file_path="style.css"
-):
-
-    if not os.path.exists(
-        file_path
-    ):
-        return
-
-
-    try:
-
-        with open(
-            file_path,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            css = f.read()
-
-
-        st.markdown(
-            f"<style>{css}</style>",
-            unsafe_allow_html=True
-        )
-
-
-    except Exception as e:
-
-        st.warning(
-            f"Could not load CSS: {e}"
-        )
-
-
-# ============================================================
-# 20. LOAD HTML
-# ============================================================
-
-def load_html(
-    file_path="index.html"
-):
-
-    if not os.path.exists(
-        file_path
-    ):
-        return
-
-
-    try:
-
-        with open(
-            file_path,
-            "r",
-            encoding="utf-8"
-        ) as f:
-
-            content = f.read()
-
-
-        try:
-
-            st.html(content)
-
-        except Exception:
-
-            st.markdown(
-                content,
-                unsafe_allow_html=True
-            )
-
-
-    except Exception as e:
-
-        st.warning(
-            f"Could not load HTML: {e}"
-        )
-
-
-# ============================================================
-# 21. LOAD CUSTOM UI
-# ============================================================
-
-load_css("style.css")
-
-load_html("index.html")
-
-
-# ============================================================
 # 22. MAIN UI
 # ============================================================
 
@@ -1520,33 +1394,6 @@ enhance_audio = st.checkbox(
 # Event detection is OFF by default.
 # ------------------------------------------------------------
 
-detect_events = st.checkbox(
-    "😮 Detect coughing, laughing, breathing, etc.",
-    value=False,
-    help=(
-        "Optional PANNs model. "
-        "It is separate from STT and may download "
-        "a large model the first time."
-    )
-)
-
-
-# ------------------------------------------------------------
-# Debug mode
-# ------------------------------------------------------------
-
-debug_mode = st.checkbox(
-    "🐞 Debug mode",
-    value=False,
-    help=(
-        "Show detailed processing errors."
-    )
-)
-
-
-# ============================================================
-# 25. MICROPHONE
-# ============================================================
 
 st.subheader(
     "🎙️ Voice Input"
@@ -1764,9 +1611,6 @@ if audio_output:
                 )
 
 
-        # ====================================================
-        # 31. DEEPGRAM
-        # ====================================================
 
         with st.spinner(
             "⚡ Deepgram is listening..."
@@ -1778,11 +1622,6 @@ if audio_output:
                     debug=debug_mode
                 )
             )
-
-
-        # ====================================================
-        # 32. HANDLE DEEPGRAM ERROR
-        # ====================================================
 
         if result["error"]:
 
