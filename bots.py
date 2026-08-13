@@ -7,7 +7,7 @@ import scipy.signal as signal
 import noisereduce as nr
 import streamlit as st
 from dotenv import load_dotenv
-import Deepgram
+from deepgram import DeepgramClient, PrerecordedOptions
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
 
