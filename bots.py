@@ -9,8 +9,12 @@ import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
-from deepgram import DeepgramClient, PrerecordedOptions
-from deepgram import Deepgram
+try:
+    from deepgram import DeepgramClient, PrerecordedOptions
+    DEEPGRAM_V3 = True
+except ImportError:
+    from deepgram import Deepgram
+    DEEPGRAM_V3 = False
 load_dotenv()
 
 # ============================
