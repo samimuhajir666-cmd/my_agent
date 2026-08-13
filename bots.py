@@ -9,12 +9,17 @@ import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
+
+# ============================
+# 🔑 DEEPGRAM SAFE IMPORT
+# ============================
 try:
     from deepgram import DeepgramClient, PrerecordedOptions
     DEEPGRAM_V3 = True
 except ImportError:
     from deepgram import Deepgram
     DEEPGRAM_V3 = False
+
 load_dotenv()
 
 # ============================
@@ -32,8 +37,12 @@ if not DEEPGRAM_API_KEY:
     st.error("DEEPGRAM_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
 
+# FIXED: Dynamic initialization based on SDK Version
 try:
-    deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
+    if DEEPGRAM_V3:
+        deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
+    else:
+        deepgram_client = Deepgram(DEEPGRAM_API_KEY)
 except Exception as e:
     st.error(f"Deepgram client failed to initialize: {e}")
     st.stop()
@@ -88,12 +97,17 @@ PANNS_SAMPLE_RATE = 32000
 
 @st.cache_resource(show_spinner=False)
 def load_sound_event_model():
-    from panns_inference import AudioTagging
-    return AudioTagging(checkpoint_path=None, device="cpu")
+    try:
+        from panns_inference import AudioTagging
+        return AudioTagging(checkpoint_path=None, device="cpu")
+    except Exception:
+        return None
 
 def detect_sound_events(audio_data, sample_rate):
     try:
         model = load_sound_event_model()
+        if model is None:
+            return []
     except Exception:
         return []
 
@@ -150,7 +164,7 @@ def detect_sound_events(audio_data, sample_rate):
         return []
 
 # ============================
-# 🎙️ DEEPGRAM TRANSCRIBE
+# 🎙️ DEEPGRAM TRANSCRIBE (HYBRID FIX)
 # ============================
 DEEPGRAM_MODEL = "nova-3"
 DEEPGRAM_CONFIDENCE_THRESHOLD = 0.55
@@ -168,40 +182,56 @@ def segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
         return False
     return max(energies) > MIN_RMS_ENERGY
 
+# FIXED: Transcribe supports both SDK v2 and SDK v3
 def transcribe_with_deepgram(processed_bytes, raw_mono_audio, sample_rate, events):
-    options = PrerecordedOptions(
-        model=DEEPGRAM_MODEL,
-        smart_format=True,
-        punctuate=True,
-        utterances=True,
-        language="multi",
-    )
-    
-    payload = {"buffer": processed_bytes, "mimetype": "audio/wav"}
-    response = deepgram_client.listen.rest.v("1").transcribe_file(payload, options)
-
-    channel = response.results.channels[0]
-    alternative = channel.alternatives[0]
-    utterances = getattr(response.results, "utterances", None) or []
-
     items = []
-    if utterances:
-        for utt in utterances:
-            text = getattr(utt, "transcript", "").strip()
-            confidence = getattr(utt, "confidence", 1.0)
-            start = getattr(utt, "start", 0.0)
-            end = getattr(utt, "end", 0.0)
+    
+    try:
+        if DEEPGRAM_V3:
+            options = PrerecordedOptions(
+                model=DEEPGRAM_MODEL,
+                smart_format=True,
+                punctuate=True,
+                utterances=True,
+                language="multi",
+            )
+            payload = {"buffer": processed_bytes, "mimetype": "audio/wav"}
+            response = deepgram_client.listen.rest.v("1").transcribe_file(payload, options)
 
-            if not text or confidence < DEEPGRAM_CONFIDENCE_THRESHOLD:
-                continue
-            if not segment_has_real_audio(start, end, raw_mono_audio, sample_rate):
-                continue
+            channel = response.results.channels[0]
+            alternative = channel.alternatives[0]
+            utterances = getattr(response.results, "utterances", None) or []
 
-            items.append((start, end, force_roman_script(text)))
-    else:
-        text = getattr(alternative, "transcript", "").strip()
-        if text:
-            items.append((0.0, 0.0, force_roman_script(text)))
+            if utterances:
+                for utt in utterances:
+                    text = getattr(utt, "transcript", "").strip()
+                    confidence = getattr(utt, "confidence", 1.0)
+                    start = getattr(utt, "start", 0.0)
+                    end = getattr(utt, "end", 0.0)
+
+                    if not text or confidence < DEEPGRAM_CONFIDENCE_THRESHOLD:
+                        continue
+                    if not segment_has_real_audio(start, end, raw_mono_audio, sample_rate):
+                        continue
+
+                    items.append((start, end, force_roman_script(text)))
+            else:
+                text = getattr(alternative, "transcript", "").strip()
+                if text:
+                    items.append((0.0, 0.0, force_roman_script(text)))
+        else:
+            # Fallback for Deepgram SDK v2
+            source = {"buffer": processed_bytes, "mimetype": "audio/wav"}
+            response = deepgram_client.transcription.sync_prerecorded(
+                source, {"model": DEEPGRAM_MODEL, "punctuate": True, "language": "multi"}
+            )
+            text = response.get("results", {}).get("channels", [{}])[0].get("alternatives", [{}])[0].get("transcript", "").strip()
+            if text:
+                items.append((0.0, 0.0, force_roman_script(text)))
+
+    except Exception as e:
+        st.error(f"Deepgram Processing Error: {e}")
+        return ""
 
     for start_sec, end_sec, tag in events:
         items.append((start_sec, end_sec, tag))
