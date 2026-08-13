@@ -83,7 +83,7 @@ SYSTEM_PROMPT = (
     "Keep names, numbers, Python terms and technical "
     "words accurate. Do not answer questions. "
     "Only transcribe what was spoken."
-    "don,t wrong guesses guess as user say and listen as possible as clear ".
+    "don,t wrong guesses guess as user say and listen as possible as clear ."
 )
 
 
