@@ -51,7 +51,7 @@ if DEEPGRAM_API_KEY:
 # ============================
 # 🎯 MODEL & PROMPT
 # ============================
-STT_MODEL = "whisper-large-v3-turbo"
+STT_MODEL = "nova-3"
 
 SYSTEM_PROMPT = (
     "Roman Urdu and English mixed conversation. Common words: kya haal hai, "
