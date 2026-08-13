@@ -202,104 +202,6 @@ NOISE_FLOOR_PERCENTILE = 10
 SPEECH_ABOVE_NOISE_FACTOR = 2.5
 SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
-DOMINANCE_FRAME_MS = 40
-DOMINANCE_WINDOW_SECONDS = 0.6
-# FIX #2: don't nearly-zero flagged frames — a wrong call becomes
-# unrecoverable. A softer floor keeps some signal so Whisper still has a
-# chance, and mistakes are merely "quieter" instead of "gone."
-DOMINANCE_ATTENUATION = 0.20
-# FIX #1: 25 Hz was far too tight — natural single-speaker intonation swings
-# well past this, so real speech was being flagged as "another speaker" and
-# suppressed. Widened to a much more realistic tolerance.
-PITCH_TOLERANCE_HZ = 60
-PITCH_FMIN = 75
-PITCH_FMAX = 280
-PITCH_HOP = 512
-def suppress_background_speaker(audio_data, sample_rate, bg_threshold, voiced_prob_threshold):
-    """
-    Voice-dominant spatial filter with dynamic sliders for live adjustments.
-
-    FIX #3: this used to conflate two different signals — "wrong pitch"
-    (likely another speaker) and "quiet relative to local peak" (which just
-    means a soft consonant or a quieter word from the SAME speaker). They are
-    now tracked separately, and the quiet-frame gate on its own is no longer
-    enough to fully attenuate a frame — only a genuine pitch mismatch can.
-    This stops the filter from chewing up consonants and soft syllables.
-    """
-    frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
-    n_frames = int(np.ceil(len(audio_data) / frame_len))
-    frame_energy = np.zeros(n_frames)
-    for i in range(n_frames):
-        chunk = audio_data[i * frame_len:(i + 1) * frame_len]
-        if len(chunk) > 0:
-            frame_energy[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
-    window_frames = max(1, int(DOMINANCE_WINDOW_SECONDS * 1000 / DOMINANCE_FRAME_MS))
-    local_dominant = np.zeros(n_frames)
-    for i in range(n_frames):
-        start = max(0, i - window_frames // 2)
-        end = min(n_frames, i + window_frames // 2 + 1)
-        local_dominant[i] = np.max(frame_energy[start:end])
-    pitch_mismatch = np.zeros(n_frames, dtype=bool)
-    f0 = np.full(n_frames, np.nan)
-
-    try:
-        import librosa
-        audio_float = audio_data.astype(np.float32) / 32768.0
-        f0_fine, _voiced_flag, voiced_prob = librosa.pyin(
-            audio_float,
-            fmin=PITCH_FMIN,
-            fmax=PITCH_FMAX,
-            sr=sample_rate,
-            hop_length=PITCH_HOP,
-        )
-        fine_sample_positions = librosa.frames_to_samples(
-            np.arange(len(f0_fine)), hop_length=PITCH_HOP
-        )
-
-        for i in range(n_frames):
-            frame_start = i * frame_len
-            frame_end = frame_start + frame_len
-            in_frame = (fine_sample_positions >= frame_start) & (fine_sample_positions < frame_end)
-
-            vals = f0_fine[in_frame]
-            probs = voiced_prob[in_frame]
-
-            valid_mask = (~np.isnan(vals)) & (probs >= voiced_prob_threshold)
-            valid_vals = vals[valid_mask]
-
-            if len(valid_vals) > 0:
-                f0[i] = np.median(valid_vals)
-    except Exception:
-        pass
-
-    voiced_mask = ~np.isnan(f0)
-    if voiced_mask.any():
-        energy_cutoff = np.percentile(frame_energy[voiced_mask], 60)
-        reference_mask = voiced_mask & (frame_energy >= energy_cutoff)
-        reference_pitches = f0[reference_mask] if reference_mask.any() else f0[voiced_mask]
-        admin_pitch = np.median(reference_pitches)
-        pitch_mismatch = voiced_mask & (np.abs(f0 - admin_pitch) > PITCH_TOLERANCE_HZ)
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        unvoiced_quiet = (frame_energy < bg_threshold * local_dominant)
-
-    # FIX #3 continued: a genuine pitch mismatch (likely a different person
-    # talking) gets the full attenuation. A frame that's merely quiet gets a
-    # much gentler dip instead of being nuked — soft consonants survive.
-    gain = np.ones(n_frames)
-    gain[unvoiced_quiet] = 0.6
-    gain[pitch_mismatch] = DOMINANCE_ATTENUATION
-    if len(gain) > 5:
-        smoothing_window = signal.windows.hamming(5)
-        smoothing_window /= np.sum(smoothing_window)
-        gain = signal.convolve(gain, smoothing_window, mode='same')
-        gain = np.clip(gain, DOMINANCE_ATTENUATION, 1.0)
-    output = audio_data.astype(np.float64).copy()
-    for i in range(n_frames):
-        start = i * frame_len
-        end = min(len(audio_data), start + frame_len)
-        output[start:end] *= gain[i]
-    return output.astype(audio_data.dtype)
 def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
     nyquist = 0.5 * sample_rate
     low = low_hz / nyquist
@@ -331,7 +233,7 @@ def contains_real_speech(audio_data, sample_rate):
     speech_frame_count = sum(1 for e in energies if e > dynamic_threshold)
     speech_seconds = speech_frame_count * (VAD_FRAME_MS / 1000)
     return speech_seconds >= MIN_SPEECH_SECONDS
-def process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold, debug=False):
+def process_audio_buffer(audio_bytes, debug=False):
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
@@ -343,20 +245,11 @@ def process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold, debug
         if duration_seconds > MAX_DURATION_SECONDS:
             audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
 
-        focused_audio = suppress_background_speaker(audio_data, sample_rate, bg_threshold, voiced_prob_threshold)
+        if not contains_real_speech(audio_data, sample_rate):
+            return None
 
-        # FIX #4: check the ORIGINAL audio too. If suppression over-attenuated
-        # a legit clip and the suppressed version now looks like silence,
-        # fall back to the original instead of discarding the whole
-        # recording as "no speech."
-        if not contains_real_speech(focused_audio, sample_rate):
-            if contains_real_speech(audio_data, sample_rate):
-                focused_audio = audio_data
-            else:
-                return None
-
-        raw_mono_audio = focused_audio.copy()
-        filtered_audio = bandpass_filter(focused_audio, sample_rate)
+        raw_mono_audio = audio_data.copy()
+        filtered_audio = bandpass_filter(raw_mono_audio, sample_rate)
         cleaned_audio_data = nr.reduce_noise(
             y=filtered_audio,
             sr=sample_rate,
@@ -397,22 +290,7 @@ load_css("style.css")
 load_html("index.html")
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
-# --- 🎛️ DYNAMIC AUDIO TUNING PANEL ---
-st.subheader("🎛️ Audio Cocktail Filter Controls")
-with st.expander("Fine-tune Background Voice Suppression Settings", expanded=True):
-    # FIX #3/#4: defaults lowered from 0.65/0.45 — the old defaults were
-    # aggressive enough to gate out real speech (soft consonants, quieter
-    # words) on typical mic input. Start gentler and let the user increase
-    # if they actually have a loud, separate background talker.
-    bg_threshold = st.slider(
-        "Background Cutoff Threshold (Higher = Suppresses louder background noises/voices)",
-        min_value=0.1, max_value=0.95, value=0.35, step=0.05
-    )
-    voiced_prob_threshold = st.slider(
-        "Voice Confidence Filter (Higher = Rejects weak/faint human harmonics)",
-        min_value=0.1, max_value=0.9, value=0.30, step=0.05
-    )
-    debug_mode = st.checkbox("🐞 Show real errors (debug mode)", value=False)
+debug_mode = st.checkbox("🐞 Show real errors (debug mode)", value=False)
 st.subheader("🎤 Voice Input")
 detect_events = st.checkbox(
     "😮 Detect sounds like coughing, laughing, breathing (adds tags like [breathing])",
@@ -436,7 +314,7 @@ if audio_output:
         st.error("No audio data received.")
         st.stop()
     with st.spinner("⏳ Processing sound..."):
-        result = process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold, debug=debug_mode)
+        result = process_audio_buffer(audio_bytes, debug=debug_mode)
     if result is None:
         st.warning("⚠️ Noise, silence, or clip too short. Please adjust sliders or speak closer to the mic.")
     else:
