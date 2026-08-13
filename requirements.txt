@@ -1,16 +1,10 @@
-# Core app
-streamlit>=1.30.0
-groq>=0.4.0
-python-dotenv>=1.0.0
-
-# Audio recording + processing
-streamlit-mic-recorder>=0.0.4
+streamlit
+deepgram-sdk
+noisereduce
 numpy
 scipy
-noisereduce
-Unidecode
-
-# Sound event detection (coughing, laughing, breathing, etc.)
-torch
-librosa
+streamlit-mic-recorder
+unidecode
+python-dotenv
 panns-inference
+librosa
