@@ -37,7 +37,7 @@ if not DEEPGRAM_API_KEY:
     st.error("DEEPGRAM_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
 
-# FIXED: Dynamic initialization based on SDK Version
+# FIXED: Pydantic positional argument error fix with keyword arg (api_key=...)
 try:
     if DEEPGRAM_V3:
         try:
@@ -49,6 +49,7 @@ try:
 except Exception as e:
     st.error(f"Deepgram client failed to initialize: {e}")
     st.stop()
+
 SYSTEM_PROMPT = (
     "Roman Urdu and English mixed conversation. Common words: kya haal hai, "
     "main theek hoon, billing amount kitna hua, cash or card, payment failed, "
@@ -166,7 +167,7 @@ def detect_sound_events(audio_data, sample_rate):
         return []
 
 # ============================
-# 🎙️ DEEPGRAM TRANSCRIBE (HYBRID FIX)
+# 🎙️ DEEPGRAM TRANSCRIBE
 # ============================
 DEEPGRAM_MODEL = "nova-3"
 DEEPGRAM_CONFIDENCE_THRESHOLD = 0.55
@@ -184,7 +185,6 @@ def segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
         return False
     return max(energies) > MIN_RMS_ENERGY
 
-# FIXED: Transcribe supports both SDK v2 and SDK v3
 def transcribe_with_deepgram(processed_bytes, raw_mono_audio, sample_rate, events):
     items = []
     
