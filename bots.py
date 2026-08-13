@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
 from deepgram import DeepgramClient, PrerecordedOptions
-
+from deepgram import Deepgram
 load_dotenv()
 
 # ============================
