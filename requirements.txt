@@ -1,10 +1,8 @@
 streamlit
-deepgram-sdk
+deepgram-sdk>=3.0.0
 noisereduce
 numpy
 scipy
 streamlit-mic-recorder
 unidecode
 python-dotenv
-panns-inference
-librosa
