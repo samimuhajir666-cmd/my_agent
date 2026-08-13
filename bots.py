@@ -1503,7 +1503,6 @@ if audio_output:
         result = process_audio_buffer(
             audio_bytes,
             enhance_audio=enhance_audio,
-            debug=debug_mode
         )
 
 
