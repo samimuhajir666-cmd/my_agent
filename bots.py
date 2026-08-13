@@ -143,13 +143,17 @@ def detect_sound_events(audio_data, sample_rate):
         return merged
     except Exception:
         return []
+# FIX: these used to require an EXACT match, so variants like
+# "I'm going to office" (only "i'm going" was listed) slipped through.
+# Now matched as substrings/fragments so the whole family of stock Whisper
+# hallucinations gets caught, not just the exact wording seen before.
+HALLUCINATION_FRAGMENTS = {
+    "thank you", "thanks for watching", "please subscribe", "subscribe",
+    "bye bye", "i'm going", "see you next time", "shukriya", "theek hai",
+}
 HALLUCINATION_PHRASES = {
-    "thank you", "thank you.", "thanks for watching", "thanks for watching.",
-    "please subscribe", "subscribe", "bye", "bye.", "bye bye", "i'm going",
-    "i'm going.", "i'm going here", "see you next time", "thank you very much",
-    "thank you so much", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
-    # FIX: a few common Roman-Urdu Whisper hallucinations
-    "shukriya", "aap ka shukriya", "theek hai", "acha", "ji",
+    "bye", "bye.", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
+    "acha", "ji",
 }
 NO_SPEECH_PROB_THRESHOLD = 0.6
 AVG_LOGPROB_THRESHOLD = -1.0
@@ -161,8 +165,27 @@ def is_likely_hallucinated(text, no_speech_prob, avg_logprob):
         return True
     if cleaned in HALLUCINATION_PHRASES:
         return True
+    if any(fragment in cleaned for fragment in HALLUCINATION_FRAGMENTS):
+        return True
     return False
-def merge_speech_and_events(segments, events):
+# FIX: cross-check what Whisper SAID against what's actually in the audio
+# at that timestamp. This is the strongest defense against hallucination —
+# it doesn't depend on guessing every possible invented phrase. If a
+# segment's own audio is near-silent/noise, the text is dropped no matter
+# how confident Whisper sounded about it.
+def segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
+    if seg_start is None or seg_end is None:
+        return True  # can't check — don't block on missing timing
+    start_sample = max(0, int(seg_start * sample_rate))
+    end_sample = min(len(audio_data), int(seg_end * sample_rate))
+    if end_sample <= start_sample:
+        return True
+    chunk = audio_data[start_sample:end_sample]
+    energies = frame_energies(chunk, sample_rate)
+    if not energies:
+        return False
+    return max(energies) > MIN_RMS_ENERGY
+def merge_speech_and_events(segments, events, audio_data=None, sample_rate=None):
     items = []
     for seg in segments:
         seg_start = getattr(seg, "start", None)
@@ -180,6 +203,9 @@ def merge_speech_and_events(segments, events):
             continue
         if is_likely_hallucinated(seg_text, no_speech_prob, avg_logprob):
             continue
+        if audio_data is not None and sample_rate is not None:
+            if not segment_has_real_audio(seg_start, seg_end, audio_data, sample_rate):
+                continue
         items.append((seg_start or 0.0, seg_end or 0.0, force_roman_script(seg_text.strip())))
     for start_sec, end_sec, tag in events:
         items.append((start_sec, end_sec, tag))
@@ -202,6 +228,13 @@ NOISE_FLOOR_PERCENTILE = 10
 SPEECH_ABOVE_NOISE_FACTOR = 2.5
 SPEECH_LOW_HZ = 85
 SPEECH_HIGH_HZ = 3400
+# Loudness-only dominant-speaker gate (no pitch tracking this time — pitch
+# tolerance was what broke real speech before). Uses a LONG window so it
+# reacts to whole quiet/loud passages, not individual syllables — that's
+# what stops it from chopping mid-word.
+DOMINANT_FRAME_MS = 100
+DOMINANT_WINDOW_SECONDS = 2.0
+DOMINANT_MIN_GAIN = 0.30
 def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
     nyquist = 0.5 * sample_rate
     low = low_hz / nyquist
@@ -209,6 +242,43 @@ def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEEC
     b, a = signal.butter(4, [low, high], btype="band")
     filtered = signal.filtfilt(b, a, audio_data.astype(np.float64))
     return filtered
+def attenuate_background_speakers(audio_data, sample_rate, sensitivity):
+    """
+    Assumes your primary user is closest to the mic and therefore the
+    loudest voice overall. Anything that stays quieter than `sensitivity`
+    fraction of the loudest nearby passage (within a 2s window) gets turned
+    down — not muted — so an occasional loud word from a background talker
+    doesn't get fully deleted, and quiet parts of the real user's own
+    speech aren't destroyed either.
+    """
+    frame_len = max(1, int(sample_rate * DOMINANT_FRAME_MS / 1000))
+    n_frames = int(np.ceil(len(audio_data) / frame_len))
+    frame_energy = np.zeros(n_frames)
+    for i in range(n_frames):
+        chunk = audio_data[i * frame_len:(i + 1) * frame_len]
+        if len(chunk) > 0:
+            frame_energy[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
+    window_frames = max(1, int(DOMINANT_WINDOW_SECONDS * 1000 / DOMINANT_FRAME_MS))
+    local_peak = np.zeros(n_frames)
+    for i in range(n_frames):
+        start = max(0, i - window_frames // 2)
+        end = min(n_frames, i + window_frames // 2 + 1)
+        local_peak[i] = np.max(frame_energy[start:end])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        quieter_than_dominant = frame_energy < (sensitivity * local_peak)
+    gain = np.ones(n_frames)
+    gain[quieter_than_dominant] = DOMINANT_MIN_GAIN
+    if len(gain) > 5:
+        smoothing_window = signal.windows.hamming(5)
+        smoothing_window /= np.sum(smoothing_window)
+        gain = signal.convolve(gain, smoothing_window, mode='same')
+        gain = np.clip(gain, DOMINANT_MIN_GAIN, 1.0)
+    output = audio_data.astype(np.float64).copy()
+    for i in range(n_frames):
+        start = i * frame_len
+        end = min(len(audio_data), start + frame_len)
+        output[start:end] *= gain[i]
+    return output.astype(audio_data.dtype)
 def normalize_audio(audio_data, target_peak=0.9):
     max_val = np.max(np.abs(audio_data))
     if max_val < 1e-6:
@@ -233,7 +303,7 @@ def contains_real_speech(audio_data, sample_rate):
     speech_frame_count = sum(1 for e in energies if e > dynamic_threshold)
     speech_seconds = speech_frame_count * (VAD_FRAME_MS / 1000)
     return speech_seconds >= MIN_SPEECH_SECONDS
-def process_audio_buffer(audio_bytes, debug=False):
+def process_audio_buffer(audio_bytes, sensitivity, debug=False):
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
@@ -248,7 +318,13 @@ def process_audio_buffer(audio_bytes, debug=False):
         if not contains_real_speech(audio_data, sample_rate):
             return None
 
-        raw_mono_audio = audio_data.copy()
+        focused_audio = attenuate_background_speakers(audio_data, sample_rate, sensitivity)
+        # Safety net: if the gate over-attenuated and wiped out real speech,
+        # fall back to the ungated audio instead of losing the whole clip.
+        if not contains_real_speech(focused_audio, sample_rate):
+            focused_audio = audio_data
+
+        raw_mono_audio = focused_audio.copy()
         filtered_audio = bandpass_filter(raw_mono_audio, sample_rate)
         cleaned_audio_data = nr.reduce_noise(
             y=filtered_audio,
@@ -290,6 +366,12 @@ load_css("style.css")
 load_html("index.html")
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
+st.subheader("🎚️ Background Voice Control")
+bg_sensitivity = st.slider(
+    "Background speaker sensitivity (Higher = suppresses louder background talkers more)",
+    min_value=0.2, max_value=0.9, value=0.5, step=0.05,
+    help="Raise this if people talking in the background are getting picked up over you."
+)
 debug_mode = st.checkbox("🐞 Show real errors (debug mode)", value=False)
 st.subheader("🎤 Voice Input")
 detect_events = st.checkbox(
@@ -314,7 +396,7 @@ if audio_output:
         st.error("No audio data received.")
         st.stop()
     with st.spinner("⏳ Processing sound..."):
-        result = process_audio_buffer(audio_bytes, debug=debug_mode)
+        result = process_audio_buffer(audio_bytes, bg_sensitivity, debug=debug_mode)
     if result is None:
         st.warning("⚠️ Noise, silence, or clip too short. Please adjust sliders or speak closer to the mic.")
     else:
@@ -337,7 +419,7 @@ if audio_output:
                 else:
                     events = []
                 if segments:
-                    text_from_voice = merge_speech_and_events(segments, events)
+                    text_from_voice = merge_speech_and_events(segments, events, raw_mono_audio, sample_rate)
                 else:
                     raw_text = getattr(transcription, "text", "").strip()
                     text_from_voice = force_roman_script(raw_text)
