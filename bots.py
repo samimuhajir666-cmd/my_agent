@@ -145,13 +145,20 @@ def transcribe(processed_bytes, sample_rate, mic_type, debug=False):
             sample_rate=sample_rate,
             speech_model="universal-3-5-pro",
             format_turns=True,
+            language_codes=["en", "ur"],
+            prompt="Conversation in English and Roman Urdu between two people.",
+            keyterms_prompt=[
+                "Python", "Streamlit", "API", "AI", "machine learning",
+                "NumPy", "SciPy", "AssemblyAI", "function", "variable",
+                "class", "dictionary", "integer", "string", "Flask",
+                "FastAPI", "JavaScript", "HTML", "CSS",
+            ],
             voice_focus=mic_type,
             voice_focus_threshold=0.7,
             end_of_turn_confidence_threshold=0.6,
         )
     )
 
-    # Send raw PCM frames with real-time pacing
     CHUNK_DURATION = 0.1
     with wave.open(io.BytesIO(processed_bytes), "rb") as wf:
         frames_per_chunk = int(wf.getframerate() * CHUNK_DURATION)
@@ -270,7 +277,10 @@ col1, col2 = st.columns(2)
 
 with col1:
     if st.button("🛑 Lock Text", use_container_width=True):
-        st.success("Text locked.") if st.session_state.transcription else st.warning("Nothing to lock.")
+        if st.session_state.transcription:
+            st.success("Text locked.")
+        else:
+            st.warning("Nothing to lock.")
 
 with col2:
     if st.button("🗑️ Clear", use_container_width=True):
