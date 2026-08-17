@@ -1,34 +1,37 @@
+
 import io
 import os
 import re
 import html
 import time
-import wave
-import threading
-import numpy as np
+
+import requests
 import scipy.io.wavfile as wav
 import streamlit as st
 from dotenv import load_dotenv
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
-from assemblyai.streaming.v3 import (
-    StreamingClient,
-    StreamingClientOptions,
-    StreamingError,
-    StreamingEvents,
-    StreamingParameters,
-    TerminationEvent,
-    TurnEvent,
-)
 
-st.set_page_config(page_title="Speech to Text", page_icon="🎤", layout="centered")
+
+# ============================================================
+# 1. PAGE SETUP
+# ============================================================
+
+st.set_page_config(
+    page_title="LISTENER - AssemblyAI STT",
+    page_icon="🎤",
+    layout="centered",
+)
 
 load_dotenv()
 
-# ============================
-# 🔑 API KEY
-# ============================
+
+# ============================================================
+# 2. ASSEMBLYAI API KEY
+# ============================================================
+
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+
 if not ASSEMBLYAI_API_KEY:
     try:
         ASSEMBLYAI_API_KEY = st.secrets.get("ASSEMBLYAI_API_KEY")
@@ -36,253 +39,870 @@ if not ASSEMBLYAI_API_KEY:
         ASSEMBLYAI_API_KEY = None
 
 if not ASSEMBLYAI_API_KEY:
-    st.error("ASSEMBLYAI_API_KEY not found. Add it to .env or Streamlit Secrets.")
+    st.error(
+        "ASSEMBLYAI_API_KEY was not found.\n\n"
+        "Add it to your .env file or Streamlit Secrets."
+    )
     st.stop()
 
-# ============================
-# 🔤 HELPERS
-# ============================
+
+# ============================================================
+# 3. ASSEMBLYAI SETTINGS
+# ============================================================
+
+ASSEMBLYAI_UPLOAD_URL = (
+    "https://api.assemblyai.com/v2/upload"
+)
+
+ASSEMBLYAI_TRANSCRIPT_URL = (
+    "https://api.assemblyai.com/v2/transcript"
+)
+
+ASSEMBLYAI_TIMEOUT = 60
+ASSEMBLYAI_POLL_SECONDS = 0.8
+
+# Universal-3 Pro is AssemblyAI's current flagship async model.
+# Automatic language detection is enabled below.
+ASSEMBLYAI_SPEECH_MODELS = [
+    "universal-3-pro"
+]
+
+# Keep the prompt focused. It is used to tell the model what
+# transcription behavior we want; it is NOT an instruction to answer.
+ASSEMBLYAI_PROMPT = (
+    "Transcribe exactly what the speaker says. "
+    "Preserve the original language and mixed-language speech. "
+    "Do not answer questions. "
+    "Do not summarize. "
+    "Do not translate. "
+    "Do not invent missing words. "
+    "Keep technical terms such as Python, Streamlit, Jupyter, "
+    "Matplotlib, Plotly, NumPy, API, AI, machine learning, "
+    "Flask, HTML and CSS."
+)
+
+
+# ============================================================
+# 4. OPTIONAL TECHNICAL TERMS
+# ============================================================
+
+TECHNICAL_TERMS = [
+    "Python",
+    "Streamlit",
+    "Jupyter",
+    "Matplotlib",
+    "Plotly",
+    "NumPy",
+    "SciPy",
+    "AssemblyAI",
+    "AI",
+    "machine learning",
+    "deep learning",
+    "API",
+    "API key",
+    "variable",
+    "function",
+    "class",
+    "list",
+    "dictionary",
+    "tuple",
+    "integer",
+    "string",
+    "float",
+    "Flask",
+    "FastAPI",
+    "JavaScript",
+    "HTML",
+    "CSS",
+]
+
+
+# ============================================================
+# 5. ROMAN SCRIPT HELPER
+# ============================================================
+
 def force_roman_script(text):
+    """
+    If AssemblyAI returns Urdu/Arabic-script characters,
+    transliterate them into Latin/Roman characters.
+
+    English text is left untouched.
+    """
+
     if not text:
+        return ""
+
+    if not re.search(r"[^\x00-\x7F]", text):
         return text
-    if bool(re.search(r'[^\x00-\x7F]', text)):
-        return unidecode(text)
-    return text
 
-# ============================
-# 🎚️ AUDIO VALIDATION
-# ============================
-MIN_RMS_ENERGY = 35.0
-MIN_DURATION_SECONDS = 0.45
-MAX_DURATION_SECONDS = 120
-VAD_FRAME_MS = 30
-MIN_SPEECH_SECONDS = 0.20
-NOISE_FLOOR_PERCENTILE = 10
-SPEECH_ABOVE_NOISE_FACTOR = 2.0
-
-
-def contains_real_speech(audio_data, sample_rate):
-    if audio_data is None or len(audio_data) == 0:
-        return False
-    frame_len = max(1, int(sample_rate * VAD_FRAME_MS / 1000))
-    energies = [
-        float(np.sqrt(np.mean(audio_data[s:s + frame_len].astype(np.float64) ** 2)))
-        for s in range(0, len(audio_data), frame_len)
-        if len(audio_data[s:s + frame_len]) > 0
-    ]
-    if not energies:
-        return False
-    noise_floor = np.percentile(energies, NOISE_FLOOR_PERCENTILE)
-    threshold = max(noise_floor * SPEECH_ABOVE_NOISE_FACTOR, MIN_RMS_ENERGY)
-    speech_secs = sum(1 for e in energies if e > threshold) * VAD_FRAME_MS / 1000.0
-    return speech_secs >= MIN_SPEECH_SECONDS
-
-
-def process_audio(audio_bytes, debug=False):
     try:
-        sample_rate, audio_data = wav.read(io.BytesIO(audio_bytes))
+        return unidecode(text)
+    except Exception:
+        return text
+
+
+# ============================================================
+# 6. BASIC WAV VALIDATION ONLY
+# ============================================================
+
+MIN_DURATION_SECONDS = 0.25
+MAX_DURATION_SECONDS = 120.0
+
+
+def inspect_audio(audio_bytes):
+    """
+    Only checks that the browser gave us a valid WAV.
+
+    IMPORTANT:
+    We do NOT remove noise, filter frequencies, detect coughs,
+    detect speakers, or reject quiet speech here.
+    """
+
+    try:
+        buffer = io.BytesIO(audio_bytes)
+
+        sample_rate, audio = wav.read(buffer)
 
         if sample_rate <= 0:
-            raise ValueError("Invalid sample rate.")
+            return None
 
-        if len(audio_data.shape) > 1:
-            audio_data = np.mean(audio_data, axis=1)
+        if audio is None or len(audio) == 0:
+            return None
 
-        audio_data = audio_data.astype(np.float64)
-        duration = len(audio_data) / float(sample_rate)
+        duration = len(audio) / float(sample_rate)
 
         if duration < MIN_DURATION_SECONDS:
             return None
-        if not contains_real_speech(audio_data, sample_rate):
-            return None
-        if duration > MAX_DURATION_SECONDS:
-            audio_data = audio_data[:int(MAX_DURATION_SECONDS * sample_rate)]
-            duration = len(audio_data) / float(sample_rate)
 
-        audio_out = np.clip(audio_data, -32768, 32767).astype(np.int16)
-        buf = io.BytesIO()
-        wav.write(buf, sample_rate, audio_out)
-        buf.seek(0)
+        if duration > MAX_DURATION_SECONDS:
+            return {
+                "sample_rate": int(sample_rate),
+                "duration": float(duration),
+                "channels": (
+                    int(audio.shape[1])
+                    if getattr(audio, "ndim", 1) > 1
+                    else 1
+                ),
+            }
 
         return {
-            "processed_bytes": buf.read(),
             "sample_rate": int(sample_rate),
             "duration": float(duration),
+            "channels": (
+                int(audio.shape[1])
+                if getattr(audio, "ndim", 1) > 1
+                else 1
+            ),
         }
-    except Exception as e:
-        if debug:
-            st.exception(e)
+
+    except Exception:
         return None
 
-# ============================
-# 🎙️ TRANSCRIBE
-# ============================
-def transcribe(processed_bytes, sample_rate, mic_type, debug=False):
-    collected_turns = []
-    done_event = threading.Event()
 
-    def on_turn(client: StreamingClient, event: TurnEvent):
-        if event.transcript and event.end_of_turn:
-            collected_turns.append(event.transcript.strip())
+# ============================================================
+# 7. ASSEMBLYAI UPLOAD
+# ============================================================
 
-    def on_terminated(client: StreamingClient, event: TerminationEvent):
-        done_event.set()
+def upload_audio_to_assemblyai(audio_bytes):
+    """
+    Upload the original WAV bytes to AssemblyAI.
 
-    def on_error(client: StreamingClient, error: StreamingError):
-        if debug:
-            st.warning(f"AssemblyAI error: {error}")
-        done_event.set()
+    No audio modification happens before this call.
+    """
 
-    client = StreamingClient(
-        StreamingClientOptions(api_key=ASSEMBLYAI_API_KEY, terminate_timeout=10.0)
+    headers = {
+        "authorization": ASSEMBLYAI_API_KEY,
+        "content-type": "application/octet-stream",
+    }
+
+    response = requests.post(
+        ASSEMBLYAI_UPLOAD_URL,
+        headers=headers,
+        data=audio_bytes,
+        timeout=ASSEMBLYAI_TIMEOUT,
     )
-    client.on(StreamingEvents.Turn, on_turn)
-    client.on(StreamingEvents.Termination, on_terminated)
-    client.on(StreamingEvents.Error, on_error)
 
-    client.connect(
-        StreamingParameters(
-            sample_rate=sample_rate,
-            speech_model="universal-3-5-pro",
-            format_turns=True,
-            language_codes=["en", "ur"],
-            prompt="Conversation in English and Roman Urdu between two people.",
-            keyterms_prompt=[
-                "Python", "Streamlit", "API", "AI", "machine learning",
-                "NumPy", "SciPy", "AssemblyAI", "function", "variable",
-                "class", "dictionary", "integer", "string", "Flask",
-                "FastAPI", "JavaScript", "HTML", "CSS",
-            ],
-            voice_focus=mic_type,
-            voice_focus_threshold=0.7,
-            end_of_turn_confidence_threshold=0.6,
+    if response.status_code not in (200, 201):
+        raise RuntimeError(
+            "AssemblyAI upload failed "
+            f"({response.status_code}): {response.text}"
         )
+
+    data = response.json()
+
+    upload_url = data.get("upload_url")
+
+    if not upload_url:
+        raise RuntimeError(
+            "AssemblyAI did not return an upload_url."
+        )
+
+    return upload_url
+
+
+# ============================================================
+# 8. START ASSEMBLYAI TRANSCRIPTION
+# ============================================================
+
+def create_assemblyai_transcript(audio_url):
+    """
+    Create an asynchronous AssemblyAI transcription job.
+    """
+
+    headers = {
+        "authorization": ASSEMBLYAI_API_KEY,
+        "content-type": "application/json",
+    }
+
+    payload = {
+        "audio_url": audio_url,
+
+        # Automatic language detection.
+        "language_detection": True,
+
+        # Current high-accuracy async model.
+        "speech_models": ASSEMBLYAI_SPEECH_MODELS,
+
+        # Preserve what was actually spoken.
+        "prompt": ASSEMBLYAI_PROMPT,
+
+        # Helpful formatting without asking the model to answer.
+        "punctuate": True,
+        "format_text": True,
+
+        # Do not turn this into a speaker-diarization project.
+        "speaker_labels": False,
+    }
+
+    response = requests.post(
+        ASSEMBLYAI_TRANSCRIPT_URL,
+        headers=headers,
+        json=payload,
+        timeout=ASSEMBLYAI_TIMEOUT,
     )
 
-    CHUNK_DURATION = 0.1
-    with wave.open(io.BytesIO(processed_bytes), "rb") as wf:
-        frames_per_chunk = int(wf.getframerate() * CHUNK_DURATION)
-        start_time = time.monotonic()
-        chunks_sent = 0
-        while True:
-            frames = wf.readframes(frames_per_chunk)
-            if not frames:
-                break
-            client.send_audio(frames)
-            chunks_sent += 1
-            sleep_for = start_time + (chunks_sent * CHUNK_DURATION) - time.monotonic()
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+    if response.status_code not in (200, 201):
+        raise RuntimeError(
+            "AssemblyAI transcription request failed "
+            f"({response.status_code}): {response.text}"
+        )
 
-    client.disconnect(terminate=True)
-    done_event.wait(timeout=15)
+    data = response.json()
 
-    return force_roman_script(" ".join(collected_turns).strip())
+    transcript_id = data.get("id")
 
-# ============================
-# 🧠 SESSION STATE
-# ============================
-if "transcription" not in st.session_state:
-    st.session_state.transcription = ""
+    if not transcript_id:
+        raise RuntimeError(
+            "AssemblyAI did not return a transcript ID."
+        )
 
-# ============================
-# 🧩 UI
-# ============================
-st.title("🎤 Speech to Text")
-st.caption("AssemblyAI Universal-3.5 Pro • Human Ears Mode • English + Roman Urdu")
+    return transcript_id
 
-st.subheader("👂 Human Ears Mode")
-mic_type = st.radio(
-    "Microphone type",
-    options=["far-field", "near-field"],
-    index=0,
-    horizontal=True,
-    help="far-field = laptop/room mic.   near-field = headset/phone held close.",
+
+# ============================================================
+# 9. POLL TRANSCRIPTION RESULT
+# ============================================================
+
+def wait_for_assemblyai_transcript(
+    transcript_id,
+    debug=False,
+):
+    """
+    Wait until AssemblyAI finishes the transcript.
+    """
+
+    headers = {
+        "authorization": ASSEMBLYAI_API_KEY,
+    }
+
+    started = time.time()
+
+    while True:
+
+        if time.time() - started > ASSEMBLYAI_TIMEOUT:
+            raise TimeoutError(
+                "AssemblyAI transcription timed out."
+            )
+
+        response = requests.get(
+            f"{ASSEMBLYAI_TRANSCRIPT_URL}/{transcript_id}",
+            headers=headers,
+            timeout=ASSEMBLYAI_TIMEOUT,
+        )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                "AssemblyAI status request failed "
+                f"({response.status_code}): {response.text}"
+            )
+
+        data = response.json()
+
+        status = data.get("status")
+
+        if status == "completed":
+            return data
+
+        if status == "error":
+            error_message = data.get(
+                "error",
+                "Unknown AssemblyAI transcription error.",
+            )
+            raise RuntimeError(error_message)
+
+        if debug:
+            st.caption(
+                f"AssemblyAI status: {status}"
+            )
+
+        time.sleep(
+            ASSEMBLYAI_POLL_SECONDS
+        )
+
+
+# ============================================================
+# 10. MAIN ASSEMBLYAI TRANSCRIPTION FUNCTION
+# ============================================================
+
+def transcribe_with_assemblyai(
+    audio_bytes,
+    debug=False,
+):
+    """
+    Complete AssemblyAI pipeline:
+
+        WAV bytes
+            ↓
+        Upload
+            ↓
+        Transcript job
+            ↓
+        Poll
+            ↓
+        Return transcript
+    """
+
+    upload_url = upload_audio_to_assemblyai(
+        audio_bytes
+    )
+
+    transcript_id = create_assemblyai_transcript(
+        upload_url
+    )
+
+    result = wait_for_assemblyai_transcript(
+        transcript_id,
+        debug=debug,
+    )
+
+    text = (
+        result.get("text")
+        or ""
+    ).strip()
+
+    confidence = result.get(
+        "confidence"
+    )
+
+    language_code = result.get(
+        "language_code"
+    )
+
+    return {
+        "text": text,
+        "confidence": confidence,
+        "language_code": language_code,
+        "transcript_id": transcript_id,
+        "raw_result": result,
+    }
+
+
+# ============================================================
+# 11. CSS / HTML HELPERS
+# ============================================================
+
+def load_css(file_path="style.css"):
+
+    if not os.path.exists(file_path):
+        return
+
+    try:
+
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            css = file.read()
+
+        st.markdown(
+            f"<style>{css}</style>",
+            unsafe_allow_html=True,
+        )
+
+    except Exception:
+        pass
+
+
+def load_html(file_path="index.html"):
+
+    if not os.path.exists(file_path):
+        return
+
+    try:
+
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8",
+        ) as file:
+
+            content = file.read()
+
+        try:
+            st.html(content)
+        except Exception:
+            st.markdown(
+                content,
+                unsafe_allow_html=True,
+            )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# 12. SESSION STATE
+# ============================================================
+
+if "last_transcription" not in st.session_state:
+    st.session_state.last_transcription = ""
+
+if "last_confidence" not in st.session_state:
+    st.session_state.last_confidence = None
+
+if "last_language" not in st.session_state:
+    st.session_state.last_language = None
+
+if "last_audio_bytes" not in st.session_state:
+    st.session_state.last_audio_bytes = None
+
+if "last_audio_info" not in st.session_state:
+    st.session_state.last_audio_info = None
+
+
+# ============================================================
+# 13. PAGE CONTENT
+# ============================================================
+
+load_css("style.css")
+load_html("index.html")
+
+st.title(
+    "🎤 LISTENER — AssemblyAI Speech to Text"
 )
 
-debug_mode = st.checkbox("🐞 Debug mode", value=False)
+st.caption(
+    "Original audio → AssemblyAI Universal-3 Pro → transcription"
+)
 
-st.divider()
+st.info(
+    "This version intentionally keeps the audio path simple. "
+    "It does not remove background voices or detect coughs, laughs, "
+    "breathing, or other sound events."
+)
+
+
+# ============================================================
+# 14. DEBUG OPTION
+# ============================================================
+
+debug_mode = st.checkbox(
+    "🐞 Show technical status",
+    value=False,
+)
+
+
+# ============================================================
+# 15. MICROPHONE
+# ============================================================
+
 st.subheader("🎤 Voice Input")
-st.write("Press Start, speak, then press Stop.")
+
+st.write(
+    "Click Start, speak normally, then click Stop."
+)
 
 audio_output = mic_recorder(
-    start_prompt="🎤 Start Recording",
+    start_prompt="🎤 Click to Start Recording",
     stop_prompt="🛑 Stop Recording",
     just_once=True,
     use_container_width=True,
     format="wav",
-    key="mic",
+    key="assemblyai_listener_mic",
 )
 
-# ============================
-# 🧠 TRANSCRIPTION
-# ============================
+
+# ============================================================
+# 16. RECORDING PROCESS
+# ============================================================
+
 if audio_output:
-    audio_bytes = audio_output.get("bytes")
+
+    audio_bytes = audio_output.get(
+        "bytes"
+    )
 
     if not audio_bytes:
-        st.error("No audio received.")
+
+        st.error(
+            "No audio data was received."
+        )
+
         st.stop()
 
-    with st.spinner("Checking audio..."):
-        result = process_audio(audio_bytes, debug=debug_mode)
 
-    if result is None:
-        st.warning("Recording too quiet or too short. Speak closer to the mic.")
-    else:
-        st.audio(audio_bytes, format="audio/wav")
+    # --------------------------------------------------------
+    # Validate only. Do not modify the recording.
+    # --------------------------------------------------------
 
-        with st.spinner("Transcribing..."):
-            try:
-                text = transcribe(
-                    result["processed_bytes"],
-                    result["sample_rate"],
-                    mic_type=mic_type,
-                    debug=debug_mode,
+    audio_info = inspect_audio(
+        audio_bytes
+    )
+
+    if audio_info is None:
+
+        st.warning(
+            "⚠️ The WAV recording is empty, invalid, "
+            "or too short. Please record again."
+        )
+
+        st.stop()
+
+
+    st.session_state.last_audio_bytes = (
+        audio_bytes
+    )
+
+    st.session_state.last_audio_info = (
+        audio_info
+    )
+
+
+    # --------------------------------------------------------
+    # ORIGINAL RECORDING PLAYBACK
+    # --------------------------------------------------------
+
+    with st.expander(
+        "🔊 Listen to the original recording",
+        expanded=True,
+    ):
+
+        st.audio(
+            audio_bytes,
+            format="audio/wav",
+        )
+
+
+    # --------------------------------------------------------
+    # AUDIO INFORMATION
+    # --------------------------------------------------------
+
+    with st.expander(
+        "🔧 Audio information"
+    ):
+
+        st.write(
+            "Duration:",
+            f"{audio_info['duration']:.2f} seconds",
+        )
+
+        st.write(
+            "Sample rate:",
+            f"{audio_info['sample_rate']} Hz",
+        )
+
+        st.write(
+            "Channels:",
+            audio_info["channels"],
+        )
+
+        st.write(
+            "Original size:",
+            f"{len(audio_bytes):,} bytes",
+        )
+
+        st.write(
+            "Audio processing:",
+            "NONE",
+        )
+
+
+    # --------------------------------------------------------
+    # ASSEMBLYAI TRANSCRIPTION
+    # --------------------------------------------------------
+
+    with st.spinner(
+        "⚡ AssemblyAI is listening..."
+    ):
+
+        try:
+
+            result = transcribe_with_assemblyai(
+                audio_bytes,
+                debug=debug_mode,
+            )
+
+            text = (
+                result["text"]
+                or ""
+            ).strip()
+
+            confidence = result[
+                "confidence"
+            ]
+
+            language_code = result[
+                "language_code"
+            ]
+
+
+            # ------------------------------------------------
+            # Preserve Roman Urdu style if AssemblyAI returns
+            # Urdu/Arabic script.
+            # ------------------------------------------------
+
+            text = force_roman_script(
+                text
+            ).strip()
+
+
+            if text:
+
+                st.session_state.last_transcription = (
+                    text
                 )
-                if text:
-                    st.session_state.transcription = text
-                    st.success("✅ Done!")
-                else:
-                    st.warning("No speech detected. Try switching mic type.")
-            except Exception as e:
-                st.error(f"Error: {e}")
-                if debug_mode:
-                    st.exception(e)
 
-# ============================
-# 📝 OUTPUT
-# ============================
+                st.session_state.last_confidence = (
+                    confidence
+                )
+
+                st.session_state.last_language = (
+                    language_code
+                )
+
+                st.success(
+                    "✅ Transcription complete."
+                )
+
+            else:
+
+                st.warning(
+                    "⚠️ AssemblyAI completed the job "
+                    "but returned no text."
+                )
+
+
+        except requests.RequestException as error:
+
+            st.error(
+                "❌ Network error while contacting AssemblyAI."
+            )
+
+            if debug_mode:
+                st.exception(error)
+
+
+        except Exception as error:
+
+            st.error(
+                f"❌ AssemblyAI error: {error}"
+            )
+
+            if debug_mode:
+                st.exception(error)
+
+
+# ============================================================
+# 17. TRANSCRIPT OUTPUT
+# ============================================================
+
 st.divider()
-st.subheader("📝 Transcribed Text")
 
-if st.session_state.transcription:
+st.subheader(
+    "📝 Transcribed Text"
+)
+
+
+if st.session_state.last_transcription:
+
+    safe_text = html.escape(
+        st.session_state.last_transcription
+    )
+
     st.markdown(
         f"""
-        <div style="background:#1e1e2e;padding:20px;border-radius:10px;
-                    border-left:4px solid #7c3aed;">
-            <p style="color:#cdd6f4;font-size:1.1rem;margin:0;">
-                {html.escape(st.session_state.transcription)}
-            </p>
+        <div class="output-card">
+            <div class="output-title">Result:</div>
+            <div class="output-text">{safe_text}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+    if (
+        st.session_state.last_confidence
+        is not None
+    ):
+
+        st.caption(
+            "AssemblyAI confidence: "
+            f"{float(st.session_state.last_confidence):.2f}"
+        )
+
+
+    if st.session_state.last_language:
+
+        st.caption(
+            "Detected language: "
+            f"{st.session_state.last_language}"
+        )
+
 else:
-    st.info("Your transcription will appear here.")
+
+    st.info(
+        "Your transcription will appear here."
+    )
+
+
+# ============================================================
+# 18. BUTTONS
+# ============================================================
 
 st.divider()
+
 col1, col2 = st.columns(2)
 
+
 with col1:
-    if st.button("🛑 Lock Text", use_container_width=True):
-        if st.session_state.transcription:
-            st.success("Text locked.")
+
+    if st.button(
+        "🛑 Lock Text",
+        use_container_width=True,
+    ):
+
+        if (
+            st.session_state.last_transcription
+        ):
+
+            st.success(
+                "Text saved in the current session."
+            )
+
         else:
-            st.warning("Nothing to lock.")
+
+            st.warning(
+                "No transcription is available."
+            )
+
 
 with col2:
-    if st.button("🗑️ Clear", use_container_width=True):
-        st.session_state.transcription = ""
+
+    if st.button(
+        "🗑️ Clear Text",
+        use_container_width=True,
+    ):
+
+        st.session_state.last_transcription = ""
+        st.session_state.last_confidence = None
+        st.session_state.last_language = None
+        st.session_state.last_audio_bytes = None
+        st.session_state.last_audio_info = None
+
         st.rerun()
+
+
+# ============================================================
+# 19. TROUBLESHOOTING
+# ============================================================
+
+with st.expander(
+    "🧪 Troubleshooting"
+):
+
+    st.markdown(
+        """
+### If the agent hears the wrong words
+
+1. First open **Listen to the original recording**.
+2. Make sure your actual voice is clear in the recording.
+3. The app sends that original WAV to AssemblyAI.
+4. There is no cough detector, speaker suppression, noise filter,
+   band-pass filter, or aggressive audio processing between the
+   microphone and AssemblyAI.
+
+### If the recording is clear but transcription is wrong
+
+That means the problem is on the speech-recognition side rather
+than an audio filter changing your voice.
+
+### Important
+
+Roman Urdu is spoken Urdu. The model may return Urdu script for
+Urdu speech; this app transliterates non-Latin output into Roman
+characters after transcription. English words are kept as English.
+        """
+    )
+
+
+# ============================================================
+# 20. CURRENT CONFIGURATION
+# ============================================================
+
+with st.expander(
+    "ℹ️ Current configuration"
+):
+
+    st.write(
+        "STT provider:",
+        "AssemblyAI",
+    )
+
+    st.write(
+        "Speech model:",
+        ", ".join(
+            ASSEMBLYAI_SPEECH_MODELS
+        ),
+    )
+
+    st.write(
+        "Language detection:",
+        "ON",
+    )
+
+    st.write(
+        "Speaker diarization:",
+        "OFF",
+    )
+
+    st.write(
+        "Sound-event detection:",
+        "OFF",
+    )
+
+    st.write(
+        "Noise cancellation:",
+        "OFF",
+    )
+
+    st.write(
+        "Background-speaker suppression:",
+        "OFF",
+    )
+
+    st.write(
+        "Audio modification:",
+        "NONE",
+    )
