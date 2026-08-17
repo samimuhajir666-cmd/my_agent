@@ -1,62 +1,56 @@
 import io
 import os
 import re
+import html
+import threading
 import numpy as np
 import scipy.io.wavfile as wav
 import scipy.signal as signal
-import noisereduce as nr
 import streamlit as st
 from dotenv import load_dotenv
-from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
-load_dotenv()
-# ============================
-# 🔑 API KEY INITIALIZATION
-# ============================
-STT_MODEL_KEY = os.getenv("GROQ_API_KEY")
-if not STT_MODEL_KEY:
-    try:
-        if "GROQ_API_KEY" in st.secrets:
-            STT_MODEL_KEY = st.secrets["GROQ_API_KEY"]
-    except Exception:
-        pass
-if not STT_MODEL_KEY:
-    st.error("GROQ_API_KEY not found. Please set it in .env or Streamlit Secrets.")
-    st.stop()
-try:
-    client = Groq(api_key=STT_MODEL_KEY)
-except Exception as e:
-    st.error(f"Could not initialize Groq client: {e}")
-    st.stop()
-# ============================
-# 🎯 MODEL & PROMPT
-# ============================
-STT_MODEL = "whisper-large-v3-turbo"
-# FIX #5: The Whisper `prompt` param is NOT an instruction channel — the model
-# does not reliably "obey" directives like "do not transcribe anything."
-# It only biases vocabulary/spelling toward the words you give it. Keep it
-# focused on domain vocabulary (Roman Urdu terms, numbers) and let the
-# no_speech_prob / avg_logprob filtering (already below) do the hallucination
-# suppression instead.
-SYSTEM_PROMPT = (
-    "Roman Urdu and English mixed conversation. Common words: kya haal hai, "
-    "main theek hoon, billing amount kitna hua, cash or card, payment failed, "
-    "status code 500, transaction approved, number 1 2 3, plus minus."
+import assemblyai as aai
+from assemblyai.streaming.v3 import (
+    BeginEvent,
+    StreamingClient,
+    StreamingClientOptions,
+    StreamingError,
+    StreamingEvents,
+    StreamingParameters,
+    TerminationEvent,
+    TurnEvent,
 )
-if len(SYSTEM_PROMPT) > 896:
-    st.error("SYSTEM_PROMPT exceeds character limit.")
+
+# ============================
+# 🖥️ STREAMLIT PAGE CONFIG
+# ============================
+st.set_page_config(
+    page_title="Speech to Text",
+    page_icon="🎤",
+    layout="centered",
+)
+
+load_dotenv()
+
+# ============================
+# 🔑 ASSEMBLYAI API KEY
+# ============================
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+
+if not ASSEMBLYAI_API_KEY:
+    try:
+        ASSEMBLYAI_API_KEY = st.secrets.get("ASSEMBLYAI_API_KEY")
+    except Exception:
+        ASSEMBLYAI_API_KEY = None
+
+if not ASSEMBLYAI_API_KEY:
+    st.error(
+        "ASSEMBLYAI_API_KEY not found. "
+        "Put it in .env or Streamlit Secrets."
+    )
     st.stop()
-def force_roman_script(text):
-    """Any non-Latin character (Arabic, Urdu, Devanagari, etc.) gets
-    converted to its closest Roman-letter form. Already-Roman text passes
-    through unchanged."""
-    if not text:
-        return text
-    has_non_ascii = bool(re.search(r'[^\x00-\x7F]', text))
-    if not has_non_ascii:
-        return text
-    return unidecode(text)
+
 # ============================
 # 😮 NON-SPEECH SOUND EVENT DETECTION
 # ============================
@@ -84,41 +78,54 @@ EVENT_LABEL_MAP = {
     "gasp": "[breathing]",
     "loudness": "[louding]",
 }
+
 EVENT_CONFIDENCE_THRESHOLD = 0.20
 BREATHING_CONFIDENCE_THRESHOLD = 0.12
 BREATHING_LABELS = {"breathing", "wheeze", "gasp"}
 EVENT_WINDOW_SECONDS = 1.5
 PANNS_SAMPLE_RATE = 32000
+
+
 @st.cache_resource(show_spinner=False)
 def load_sound_event_model():
-    """Loads the PANNs AudioSet tagging model once and caches it."""
-    from panns_inference import AudioTagging
-    return AudioTagging(checkpoint_path=None, device="cpu")
+    try:
+        from panns_inference import AudioTagging
+        return AudioTagging(checkpoint_path=None, device="cpu")
+    except Exception:
+        return None
+
+
 def detect_sound_events(audio_data, sample_rate):
-    """Runs the audio through PANNs in fixed windows and returns a list of
-    (start_seconds, end_seconds, tag) for recognized non-speech events."""
     try:
         model = load_sound_event_model()
+        if model is None:
+            return []
     except Exception:
         return []
+
     try:
         import librosa
         from panns_inference import labels as audioset_labels
+
         audio_float = audio_data.astype(np.float32) / 32768.0
         if sample_rate != PANNS_SAMPLE_RATE:
             audio_float = librosa.resample(
                 audio_float, orig_sr=sample_rate, target_sr=PANNS_SAMPLE_RATE
             )
+
         window_len = int(EVENT_WINDOW_SECONDS * PANNS_SAMPLE_RATE)
         total_len = len(audio_float)
         raw_events = []
+
         for start_sample in range(0, total_len, window_len):
             end_sample = min(start_sample + window_len, total_len)
             chunk = audio_float[start_sample:end_sample]
             if len(chunk) < PANNS_SAMPLE_RATE * 0.3:
                 continue
+
             clipwise_output, _ = model.inference(chunk[None, :])
             probs = clipwise_output[0]
+
             for idx, prob in enumerate(probs):
                 label_name = audioset_labels[idx].strip().lower()
                 if label_name not in EVENT_LABEL_MAP:
@@ -133,6 +140,7 @@ def detect_sound_events(audio_data, sample_rate):
                 start_sec = start_sample / PANNS_SAMPLE_RATE
                 end_sec = end_sample / PANNS_SAMPLE_RATE
                 raw_events.append((start_sec, end_sec, EVENT_LABEL_MAP[label_name]))
+
         raw_events.sort(key=lambda e: e[0])
         merged = []
         for start_sec, end_sec, tag in raw_events:
@@ -140,179 +148,181 @@ def detect_sound_events(audio_data, sample_rate):
                 merged[-1] = (merged[-1][0], end_sec, tag)
             else:
                 merged.append((start_sec, end_sec, tag))
+
         return merged
     except Exception:
         return []
-HALLUCINATION_PHRASES = {
-    "thank you", "thank you.", "thanks for watching", "thanks for watching.",
-    "please subscribe", "subscribe", "bye", "bye.", "bye bye", "i'm going",
-    "i'm going.", "i'm going here", "see you next time", "thank you very much",
-    "thank you so much", "okay", "ok", "yeah", "hmm", "you", ".", "..", "...",
-    # FIX: a few common Roman-Urdu Whisper hallucinations
-    "shukriya", "aap ka shukriya", "theek hai", "acha", "ji",
-}
-NO_SPEECH_PROB_THRESHOLD = 0.6
-AVG_LOGPROB_THRESHOLD = -1.0
-def is_likely_hallucinated(text, no_speech_prob, avg_logprob):
-    cleaned = text.strip().lower()
-    if no_speech_prob is not None and no_speech_prob > NO_SPEECH_PROB_THRESHOLD:
-        return True
-    if avg_logprob is not None and avg_logprob < AVG_LOGPROB_THRESHOLD:
-        return True
-    if cleaned in HALLUCINATION_PHRASES:
-        return True
-    return False
-def merge_speech_and_events(segments, events):
-    items = []
-    for seg in segments:
-        seg_start = getattr(seg, "start", None)
-        seg_end = getattr(seg, "end", None)
-        seg_text = getattr(seg, "text", None)
-        no_speech_prob = getattr(seg, "no_speech_prob", None)
-        avg_logprob = getattr(seg, "avg_logprob", None)
-        if seg_start is None and isinstance(seg, dict):
-            seg_start = seg.get("start")
-            seg_end = seg.get("end")
-            seg_text = seg.get("text")
-            no_speech_prob = seg.get("no_speech_prob")
-            avg_logprob = seg.get("avg_logprob")
-        if not seg_text:
-            continue
-        if is_likely_hallucinated(seg_text, no_speech_prob, avg_logprob):
-            continue
-        items.append((seg_start or 0.0, seg_end or 0.0, force_roman_script(seg_text.strip())))
-    for start_sec, end_sec, tag in events:
-        items.append((start_sec, end_sec, tag))
-    items.sort(key=lambda x: x[0])
-    parts = []
-    for _, _, text in items:
-        if parts and parts[-1] == text:
-            continue
-        parts.append(text)
-    return " ".join(parts).strip()
+
+
 # ============================
-# 🎚️ AUDIO PROCESSING & CONFIGS
+# 🔤 ROMAN SCRIPT HELPER
 # ============================
-MIN_RMS_ENERGY = 60.0
-MIN_DURATION_SECONDS = 0.8
-MAX_DURATION_SECONDS = 120
-VAD_FRAME_MS = 30
-MIN_SPEECH_SECONDS = 0.3
-NOISE_FLOOR_PERCENTILE = 10
-SPEECH_ABOVE_NOISE_FACTOR = 2.5
-SPEECH_LOW_HZ = 85
-SPEECH_HIGH_HZ = 3400
-DOMINANCE_FRAME_MS = 40
-DOMINANCE_WINDOW_SECONDS = 0.6
-# FIX #2: don't nearly-zero flagged frames — a wrong call becomes
-# unrecoverable. A softer floor keeps some signal so Whisper still has a
-# chance, and mistakes are merely "quieter" instead of "gone."
-DOMINANCE_ATTENUATION = 0.20
-# FIX #1: 25 Hz was far too tight — natural single-speaker intonation swings
-# well past this, so real speech was being flagged as "another speaker" and
-# suppressed. Widened to a much more realistic tolerance.
-PITCH_TOLERANCE_HZ = 60
-PITCH_FMIN = 75
-PITCH_FMAX = 280
-PITCH_HOP = 512
-def suppress_background_speaker(audio_data, sample_rate, bg_threshold, voiced_prob_threshold):
+def force_roman_script(text):
+    if not text:
+        return text
+    has_non_ascii = bool(re.search(r'[^\x00-\x7F]', text))
+    if not has_non_ascii:
+        return text
+    return unidecode(text)
+
+
+# ============================
+# 🎙️ ASSEMBLYAI TRANSCRIBE
+# ============================
+def transcribe_with_assemblyai(
+    processed_bytes,
+    sample_rate,
+    voice_focus_mode="far-field",
+    voice_focus_threshold=0.7,
+    debug=False,
+):
     """
-    Voice-dominant spatial filter with dynamic sliders for live adjustments.
+    Stream WAV bytes through AssemblyAI Streaming STT SDK.
 
-    FIX #3: this used to conflate two different signals — "wrong pitch"
-    (likely another speaker) and "quiet relative to local peak" (which just
-    means a soft consonant or a quieter word from the SAME speaker). They are
-    now tracked separately, and the quiet-frame gate on its own is no longer
-    enough to fully attenuate a frame — only a genuine pitch mismatch can.
-    This stops the filter from chewing up consonants and soft syllables.
+    Uses:
+    - universal-3-5-pro  → best model for noisy/multi-speaker environments
+    - voice_focus        → server-side background suppression (human ears model)
+    - format_turns=True  → clean final transcripts only
     """
-    frame_len = max(1, int(sample_rate * DOMINANCE_FRAME_MS / 1000))
-    n_frames = int(np.ceil(len(audio_data) / frame_len))
-    frame_energy = np.zeros(n_frames)
-    for i in range(n_frames):
-        chunk = audio_data[i * frame_len:(i + 1) * frame_len]
-        if len(chunk) > 0:
-            frame_energy[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
-    window_frames = max(1, int(DOMINANCE_WINDOW_SECONDS * 1000 / DOMINANCE_FRAME_MS))
-    local_dominant = np.zeros(n_frames)
-    for i in range(n_frames):
-        start = max(0, i - window_frames // 2)
-        end = min(n_frames, i + window_frames // 2 + 1)
-        local_dominant[i] = np.max(frame_energy[start:end])
-    pitch_mismatch = np.zeros(n_frames, dtype=bool)
-    f0 = np.full(n_frames, np.nan)
+    collected_turns = []
+    done_event = threading.Event()
 
-    try:
-        import librosa
-        audio_float = audio_data.astype(np.float32) / 32768.0
-        f0_fine, _voiced_flag, voiced_prob = librosa.pyin(
-            audio_float,
-            fmin=PITCH_FMIN,
-            fmax=PITCH_FMAX,
-            sr=sample_rate,
-            hop_length=PITCH_HOP,
-        )
-        fine_sample_positions = librosa.frames_to_samples(
-            np.arange(len(f0_fine)), hop_length=PITCH_HOP
-        )
-
-        for i in range(n_frames):
-            frame_start = i * frame_len
-            frame_end = frame_start + frame_len
-            in_frame = (fine_sample_positions >= frame_start) & (fine_sample_positions < frame_end)
-
-            vals = f0_fine[in_frame]
-            probs = voiced_prob[in_frame]
-
-            valid_mask = (~np.isnan(vals)) & (probs >= voiced_prob_threshold)
-            valid_vals = vals[valid_mask]
-
-            if len(valid_vals) > 0:
-                f0[i] = np.median(valid_vals)
-    except Exception:
+    def on_begin(client: StreamingClient, event: BeginEvent):
         pass
 
-    voiced_mask = ~np.isnan(f0)
-    if voiced_mask.any():
-        energy_cutoff = np.percentile(frame_energy[voiced_mask], 60)
-        reference_mask = voiced_mask & (frame_energy >= energy_cutoff)
-        reference_pitches = f0[reference_mask] if reference_mask.any() else f0[voiced_mask]
-        admin_pitch = np.median(reference_pitches)
-        pitch_mismatch = voiced_mask & (np.abs(f0 - admin_pitch) > PITCH_TOLERANCE_HZ)
+    def on_turn(client: StreamingClient, event: TurnEvent):
+        if event.transcript and event.end_of_turn:
+            collected_turns.append(event.transcript.strip())
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        unvoiced_quiet = (frame_energy < bg_threshold * local_dominant)
+    def on_terminated(client: StreamingClient, event: TerminationEvent):
+        done_event.set()
 
-    # FIX #3 continued: a genuine pitch mismatch (likely a different person
-    # talking) gets the full attenuation. A frame that's merely quiet gets a
-    # much gentler dip instead of being nuked — soft consonants survive.
-    gain = np.ones(n_frames)
-    gain[unvoiced_quiet] = 0.6
-    gain[pitch_mismatch] = DOMINANCE_ATTENUATION
-    if len(gain) > 5:
-        smoothing_window = signal.windows.hamming(5)
-        smoothing_window /= np.sum(smoothing_window)
-        gain = signal.convolve(gain, smoothing_window, mode='same')
-        gain = np.clip(gain, DOMINANCE_ATTENUATION, 1.0)
-    output = audio_data.astype(np.float64).copy()
-    for i in range(n_frames):
-        start = i * frame_len
-        end = min(len(audio_data), start + frame_len)
-        output[start:end] *= gain[i]
-    return output.astype(audio_data.dtype)
+    def on_error(client: StreamingClient, error: StreamingError):
+        if debug:
+            st.warning(f"AssemblyAI streaming error: {error}")
+        done_event.set()
+
+    client = StreamingClient(
+        StreamingClientOptions(
+            api_key=ASSEMBLYAI_API_KEY,
+            terminate_timeout=10.0,
+        )
+    )
+    client.on(StreamingEvents.Begin, on_begin)
+    client.on(StreamingEvents.Turn, on_turn)
+    client.on(StreamingEvents.Termination, on_terminated)
+    client.on(StreamingEvents.Error, on_error)
+
+    # ✅ KEY: voice_focus = "human ears" — isolate speech, kill background
+    client.connect(
+        StreamingParameters(
+            sample_rate=sample_rate,
+            speech_model="universal-3-5-pro",
+            format_turns=True,
+            voice_focus=voice_focus_mode,
+            voice_focus_threshold=voice_focus_threshold,
+            end_of_turn_confidence_threshold=0.6,
+        )
+    )
+
+    # Stream WAV bytes in chunks
+    CHUNK_SIZE = 4096
+    offset = 0
+    while offset < len(processed_bytes):
+        chunk = processed_bytes[offset: offset + CHUNK_SIZE]
+        client.send_audio(chunk)
+        offset += CHUNK_SIZE
+
+    client.disconnect(terminate=True)
+    done_event.wait(timeout=15)
+
+    full_text = " ".join(collected_turns).strip()
+    full_text = force_roman_script(full_text)
+
+    return {"text": full_text, "confidence": 1.0}
+
+
+# ============================
+# 🎚️ AUDIO PROCESSING
+# ============================
+MIN_RMS_ENERGY = 35.0
+MIN_DURATION_SECONDS = 0.45
+MAX_DURATION_SECONDS = 120
+VAD_FRAME_MS = 30
+MIN_SPEECH_SECONDS = 0.20
+NOISE_FLOOR_PERCENTILE = 10
+SPEECH_ABOVE_NOISE_FACTOR = 2.0
+SPEECH_LOW_HZ = 70
+SPEECH_HIGH_HZ = 7600
+DOMINANT_FRAME_MS = 100
+DOMINANT_WINDOW_SECONDS = 2.0
+DOMINANT_MIN_GAIN = 0.65
+
+
 def bandpass_filter(audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ):
-    nyquist = 0.5 * sample_rate
-    low = low_hz / nyquist
-    high = min(high_hz / nyquist, 0.99)
-    b, a = signal.butter(4, [low, high], btype="band")
-    filtered = signal.filtfilt(b, a, audio_data.astype(np.float64))
-    return filtered
-def normalize_audio(audio_data, target_peak=0.9):
-    max_val = np.max(np.abs(audio_data))
-    if max_val < 1e-6:
+    if len(audio_data) < 100:
         return audio_data
-    scale = (target_peak * 32767.0) / max_val
-    return audio_data * scale
+    nyquist = 0.5 * sample_rate
+    low = max(0.001, low_hz / nyquist)
+    high = min(0.99, high_hz / nyquist)
+    if low >= high:
+        return audio_data
+    try:
+        b, a = signal.butter(3, [low, high], btype="band")
+        return signal.filtfilt(b, a, audio_data.astype(np.float64))
+    except Exception:
+        return audio_data
+
+
+def attenuate_background_speakers(audio_data, sample_rate, sensitivity):
+    try:
+        frame_len = max(1, int(sample_rate * DOMINANT_FRAME_MS / 1000))
+        n_frames = int(np.ceil(len(audio_data) / frame_len))
+        if n_frames <= 1:
+            return audio_data
+
+        frame_energy = np.zeros(n_frames, dtype=np.float64)
+        for i in range(n_frames):
+            chunk = audio_data[i * frame_len:(i + 1) * frame_len]
+            if len(chunk) > 0:
+                frame_energy[i] = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
+
+        window_frames = max(1, int(DOMINANT_WINDOW_SECONDS * 1000 / DOMINANT_FRAME_MS))
+        local_peak = np.zeros(n_frames, dtype=np.float64)
+        for i in range(n_frames):
+            start = max(0, i - window_frames // 2)
+            end = min(n_frames, i + window_frames // 2 + 1)
+            local_peak[i] = np.max(frame_energy[start:end])
+
+        sensitivity = float(np.clip(sensitivity, 0.05, 0.80))
+        quieter = frame_energy < (sensitivity * local_peak)
+        gain = np.ones(n_frames, dtype=np.float64)
+        gain[quieter] = DOMINANT_MIN_GAIN
+
+        if len(gain) > 5:
+            smoothing_window = signal.get_window("hamming", 5)
+            smoothing_window /= np.sum(smoothing_window)
+            gain = signal.convolve(gain, smoothing_window, mode="same")
+            gain = np.clip(gain, DOMINANT_MIN_GAIN, 1.0)
+
+        output = audio_data.astype(np.float64).copy()
+        for i in range(n_frames):
+            start = i * frame_len
+            end = min(len(audio_data), start + frame_len)
+            output[start:end] *= gain[i]
+
+        return output
+    except Exception:
+        return audio_data
+
+
+def normalize_audio(audio_data, target_peak=0.90):
+    max_val = np.max(np.abs(audio_data))
+    if max_val < 1e-8:
+        return audio_data
+    return audio_data * (target_peak * 32767.0 / max_val)
+
+
 def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
     frame_len = max(1, int(sample_rate * frame_ms / 1000))
     energies = []
@@ -320,182 +330,382 @@ def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
         chunk = audio_data[start:start + frame_len]
         if len(chunk) == 0:
             continue
-        energies.append(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
+        energies.append(float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2))))
     return energies
+
+
 def contains_real_speech(audio_data, sample_rate):
+    if audio_data is None or len(audio_data) == 0:
+        return False
     energies = frame_energies(audio_data, sample_rate)
     if not energies:
         return False
     noise_floor = np.percentile(energies, NOISE_FLOOR_PERCENTILE)
     dynamic_threshold = max(noise_floor * SPEECH_ABOVE_NOISE_FACTOR, MIN_RMS_ENERGY)
     speech_frame_count = sum(1 for e in energies if e > dynamic_threshold)
-    speech_seconds = speech_frame_count * (VAD_FRAME_MS / 1000)
-    return speech_seconds >= MIN_SPEECH_SECONDS
-def process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold, debug=False):
+    return (speech_frame_count * VAD_FRAME_MS / 1000.0) >= MIN_SPEECH_SECONDS
+
+
+def process_audio_buffer(
+    audio_bytes,
+    enhance_audio=False,
+    suppress_background=False,
+    background_sensitivity=0.35,
+    debug=False,
+):
     try:
-        audio_file = io.BytesIO(audio_bytes)
-        sample_rate, audio_data = wav.read(audio_file)
+        sample_rate, audio_data = wav.read(io.BytesIO(audio_bytes))
+
+        if sample_rate <= 0:
+            raise ValueError("Invalid sample rate.")
+
         if len(audio_data.shape) > 1:
-            audio_data = audio_data.mean(axis=1).astype(audio_data.dtype)
-        duration_seconds = len(audio_data) / float(sample_rate)
-        if duration_seconds < MIN_DURATION_SECONDS:
+            audio_data = np.mean(audio_data, axis=1)
+
+        audio_data = audio_data.astype(np.float64)
+        duration = len(audio_data) / float(sample_rate)
+
+        if duration < MIN_DURATION_SECONDS:
             return None
-        if duration_seconds > MAX_DURATION_SECONDS:
-            audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
 
-        focused_audio = suppress_background_speaker(audio_data, sample_rate, bg_threshold, voiced_prob_threshold)
+        if duration > MAX_DURATION_SECONDS:
+            audio_data = audio_data[:int(MAX_DURATION_SECONDS * sample_rate)]
+            duration = len(audio_data) / float(sample_rate)
 
-        # FIX #4: check the ORIGINAL audio too. If suppression over-attenuated
-        # a legit clip and the suppressed version now looks like silence,
-        # fall back to the original instead of discarding the whole
-        # recording as "no speech."
-        if not contains_real_speech(focused_audio, sample_rate):
-            if contains_real_speech(audio_data, sample_rate):
-                focused_audio = audio_data
-            else:
-                return None
+        if not contains_real_speech(audio_data, sample_rate):
+            return None
 
-        raw_mono_audio = focused_audio.copy()
-        filtered_audio = bandpass_filter(focused_audio, sample_rate)
-        cleaned_audio_data = nr.reduce_noise(
-            y=filtered_audio,
-            sr=sample_rate,
-            stationary=False,
-            prop_decrease=0.4,
-        )
-        cleaned_audio_data = normalize_audio(cleaned_audio_data)
+        raw_mono_audio = audio_data.copy()
+        processed_audio = audio_data.copy()
+
+        # Optional: client-side background attenuation
+        # NOTE: Voice Focus (server-side) is preferred. Use this only as extra help.
+        if suppress_background:
+            processed_audio = attenuate_background_speakers(
+                processed_audio, sample_rate, background_sensitivity
+            )
+
+        # Optional: light bandpass filter only (no noisereduce — it hurts STT accuracy)
+        if enhance_audio:
+            processed_audio = bandpass_filter(processed_audio, sample_rate)
+            processed_audio = normalize_audio(processed_audio)
+
+        if not contains_real_speech(processed_audio, sample_rate):
+            processed_audio = raw_mono_audio.copy()
+
+        processed_audio = np.clip(processed_audio, -32768, 32767).astype(np.int16)
+
         output_buffer = io.BytesIO()
-        wav.write(output_buffer, sample_rate, cleaned_audio_data.astype(np.int16))
+        wav.write(output_buffer, sample_rate, processed_audio)
         output_buffer.seek(0)
-        return output_buffer.read(), raw_mono_audio, sample_rate
+
+        return {
+            "processed_bytes": output_buffer.read(),
+            "raw_audio": raw_mono_audio,
+            "sample_rate": int(sample_rate),
+            "duration": float(duration),
+        }
+
     except Exception as e:
-        # FIX #6: surface the real error instead of silently returning None
-        # for every failure mode (bad WAV header, unsupported format, etc.)
         if debug:
             st.exception(e)
         return None
+
+
 # ============================
-# 🖥️ STREAMLIT UI
+# 🖥️ STREAMLIT UI HELPERS
 # ============================
-st.set_page_config(
-    page_title="Speech to Text",
-    page_icon="🎤",
-    layout="centered"
-)
 def load_css(file_path="style.css"):
     if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+        except Exception:
+            pass
+
+
 def load_html(file_path="index.html"):
     if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
             try:
-                st.html(f.read())
+                st.html(content)
             except Exception:
-                st.markdown(f.read(), unsafe_allow_html=True)
+                st.markdown(content, unsafe_allow_html=True)
+        except Exception:
+            pass
+
+
+# ============================
+# 🧠 SESSION STATE
+# ============================
+defaults = {
+    "last_transcription": "",
+    "last_confidence": None,
+    "last_audio_bytes": None,
+    "last_audio_duration": None,
+    "last_sample_rate": None,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ============================
+# 🧩 PAGE CONTENT
+# ============================
 load_css("style.css")
 load_html("index.html")
-if "last_transcription" not in st.session_state:
-    st.session_state.last_transcription = ""
-# --- 🎛️ DYNAMIC AUDIO TUNING PANEL ---
-st.subheader("🎛️ Audio Cocktail Filter Controls")
-with st.expander("Fine-tune Background Voice Suppression Settings", expanded=True):
-    # FIX #3/#4: defaults lowered from 0.65/0.45 — the old defaults were
-    # aggressive enough to gate out real speech (soft consonants, quieter
-    # words) on typical mic input. Start gentler and let the user increase
-    # if they actually have a loud, separate background talker.
-    bg_threshold = st.slider(
-        "Background Cutoff Threshold (Higher = Suppresses louder background noises/voices)",
-        min_value=0.1, max_value=0.95, value=0.35, step=0.05
-    )
-    voiced_prob_threshold = st.slider(
-        "Voice Confidence Filter (Higher = Rejects weak/faint human harmonics)",
-        min_value=0.1, max_value=0.9, value=0.30, step=0.05
-    )
-    debug_mode = st.checkbox("🐞 Show real errors (debug mode)", value=False)
-st.subheader("🎤 Voice Input")
-detect_events = st.checkbox(
-    "😮 Detect sounds like coughing, laughing, breathing (adds tags like [breathing])",
-    value=True,
-    help="First use downloads a ~300MB model one time. Needs internet on this machine."
+
+st.title("🎤 SPEECH TO TEXT")
+st.caption(
+    "AssemblyAI Universal-3.5 Pro • Voice Focus • English + Roman Urdu"
 )
+st.info(
+    "Record your voice, stop the recording, and the app will transcribe it. "
+    "Voice Focus runs server-side — it isolates speech and ignores background noise automatically."
+)
+
+# ============================
+# 👂 VOICE FOCUS (Human Ears) CONTROLS
+# ============================
+st.subheader("👂 Voice Focus — Human Ears Mode")
+
+col_vf1, col_vf2 = st.columns(2)
+
+with col_vf1:
+    voice_focus_mode = st.selectbox(
+        "Microphone type",
+        options=["far-field", "near-field"],
+        index=0,
+        help=(
+            "far-field: laptop mic, room mic, conference — best for 2 people talking.\n"
+            "near-field: headset or handset held close to mouth."
+        ),
+    )
+
+with col_vf2:
+    voice_focus_threshold = st.slider(
+        "Background suppression strength",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.7,
+        step=0.05,
+        help=(
+            "Higher = more aggressive background removal. "
+            "0.7 is the default. Lower if your own voice gets cut."
+        ),
+    )
+
+# ============================
+# 🎚️ OPTIONAL CLIENT-SIDE CONTROLS
+# ============================
+st.subheader("🎚️ Optional Audio Controls")
+st.caption(
+    "Voice Focus (above) handles noise server-side. "
+    "These are extra client-side options — keep OFF unless needed."
+)
+
+col_a, col_b = st.columns(2)
+
+with col_a:
+    enhance_audio = st.checkbox(
+        "✨ Light bandpass filter",
+        value=False,
+        help="Gentle speech-frequency filter only. No noisereduce (it hurts STT accuracy).",
+    )
+
+with col_b:
+    suppress_background = st.checkbox(
+        "🔇 Client-side background attenuation",
+        value=False,
+        help="Extra quiet-frame suppression. Keep OFF if Voice Focus is enough.",
+    )
+
+if suppress_background:
+    bg_sensitivity = st.slider(
+        "Attenuation sensitivity",
+        min_value=0.05, max_value=0.80, value=0.35, step=0.05,
+    )
+else:
+    bg_sensitivity = 0.35
+
+debug_mode = st.checkbox("🐞 Show technical errors", value=False)
+
+detect_events = st.checkbox(
+    "😮 Detect coughing/laughing/breathing",
+    value=False,
+    help="Optional. Requires PANNs/librosa. OFF by default.",
+)
+
+# ============================
+# 🎤 MICROPHONE
+# ============================
+st.subheader("🎤 Voice Input")
+st.write("Press Start, speak normally, then press Stop.")
+
 audio_output = mic_recorder(
     start_prompt="🎤 Click to Start Recording",
     stop_prompt="🛑 Stop Recording",
     just_once=True,
     use_container_width=True,
     format="wav",
-    key="listener_mic"
+    key="listener_mic",
 )
+
 # ============================
 # 🧠 TRANSCRIPTION LOGIC
 # ============================
 if audio_output:
     audio_bytes = audio_output.get("bytes")
+
     if not audio_bytes:
         st.error("No audio data received.")
         st.stop()
-    with st.spinner("⏳ Processing sound..."):
-        result = process_audio_buffer(audio_bytes, bg_threshold, voiced_prob_threshold, debug=debug_mode)
+
+    with st.spinner("⏳ Checking audio..."):
+        result = process_audio_buffer(
+            audio_bytes,
+            enhance_audio=enhance_audio,
+            suppress_background=suppress_background,
+            background_sensitivity=bg_sensitivity,
+            debug=debug_mode,
+        )
+
     if result is None:
-        st.warning("⚠️ Noise, silence, or clip too short. Please adjust sliders or speak closer to the mic.")
+        st.warning(
+            "⚠️ The recording was too quiet, too short, or contained "
+            "no detectable speech. Speak closer to the microphone and try again."
+        )
     else:
-        processed_bytes, raw_mono_audio, sample_rate = result
-        with st.spinner("⚡ Transcribing speech..."):
+        processed_bytes = result["processed_bytes"]
+        raw_audio = result["raw_audio"]
+        sample_rate = result["sample_rate"]
+        duration = result["duration"]
+
+        st.session_state.last_audio_bytes = processed_bytes
+        st.session_state.last_audio_duration = duration
+        st.session_state.last_sample_rate = sample_rate
+
+        with st.expander("🔧 Audio information"):
+            st.write(f"Duration: {duration:.2f} seconds")
+            st.write(f"Sample rate: {sample_rate} Hz")
+            st.write(f"Original size: {len(audio_bytes):,} bytes")
+            st.write(f"Processed size: {len(processed_bytes):,} bytes")
+            st.write(f"Voice Focus mode: {voice_focus_mode}")
+            st.write(f"Voice Focus threshold: {voice_focus_threshold}")
+            st.write(f"Bandpass filter: {'ON' if enhance_audio else 'OFF'}")
+            st.write(f"Client attenuation: {'ON' if suppress_background else 'OFF'}")
+
+        with st.expander("🔊 Listen to the recording"):
+            st.audio(audio_bytes, format="audio/wav")
+
+        events = []
+        if detect_events:
+            with st.spinner("😮 Checking optional sound events..."):
+                events = detect_sound_events(raw_audio, sample_rate)
+
+        with st.spinner("⚡ Transcribing with AssemblyAI Universal-3.5 Pro + Voice Focus..."):
             try:
-                audio_file = io.BytesIO(processed_bytes)
-                audio_file.name = "recording.wav"
-                transcription = client.audio.transcriptions.create(
-                    file=audio_file,
-                    model=STT_MODEL,
-                    prompt=SYSTEM_PROMPT,
-                    response_format="verbose_json",
-                    temperature=0.0
+                transcription_result = transcribe_with_assemblyai(
+                    processed_bytes,
+                    sample_rate,
+                    voice_focus_mode=voice_focus_mode,
+                    voice_focus_threshold=voice_focus_threshold,
+                    debug=debug_mode,
                 )
-                segments = getattr(transcription, "segments", None) or []
-                if detect_events:
-                    with st.spinner("😮 Checking for coughing, laughing, breathing..."):
-                        events = detect_sound_events(raw_mono_audio, sample_rate)
-                else:
-                    events = []
-                if segments:
-                    text_from_voice = merge_speech_and_events(segments, events)
-                else:
-                    raw_text = getattr(transcription, "text", "").strip()
-                    text_from_voice = force_roman_script(raw_text)
-                    if events:
-                        tags = " ".join(sorted(set(tag for _, _, tag in events)))
-                        text_from_voice = f"{text_from_voice} {tags}".strip()
-                if text_from_voice and len(text_from_voice) > 1:
+
+                text_from_voice = transcription_result["text"].strip()
+
+                if events:
+                    event_tags = " ".join(event[2] for event in events)
+                    if event_tags:
+                        text_from_voice = f"{text_from_voice} {event_tags}".strip()
+
+                if text_from_voice:
                     st.session_state.last_transcription = text_from_voice
+                    st.session_state.last_confidence = transcription_result["confidence"]
                     st.success("✅ Complete!")
                 else:
-                    st.warning("⚠️ Could not detect clear speech.")
+                    st.warning(
+                        "⚠️ AssemblyAI did not return recognizable speech. "
+                        "Try lowering the Voice Focus threshold or switching to near-field."
+                    )
+
             except Exception as e:
-                st.error(f"Transcription error: {e}")
+                st.error(f"❌ Transcription error: {e}")
+                if debug_mode:
+                    st.exception(e)
+
 # ============================
 # 📝 DISPLAY OUTPUT
 # ============================
+st.divider()
+st.subheader("📝 Transcribed Text")
+
 if st.session_state.last_transcription:
-    st.markdown("### 📝 Transcribed Text")
+    safe_text = html.escape(st.session_state.last_transcription)
     st.markdown(
         f"""
         <div class="output-card">
             <div class="output-title">Result:</div>
-            <div class="output-text">{st.session_state.last_transcription}</div>
+            <div class="output-text">{safe_text}</div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
+else:
+    st.info("Your transcription will appear here.")
+
+# ============================
+# 🛠️ CONTROLS
+# ============================
 st.divider()
+
 col1, col2 = st.columns(2)
+
 with col1:
     if st.button("🛑 Lock Text", use_container_width=True):
         if st.session_state.last_transcription:
-            st.success("Text saved.")
+            st.success("Text saved in the current session.")
         else:
             st.warning("No recorded text available.")
+
 with col2:
     if st.button("🗑️ Clear Text", use_container_width=True):
-        st.session_state.last_transcription = ""
+        for k, v in defaults.items():
+            st.session_state[k] = v
         st.rerun()
+
+# ============================
+# 🧪 TROUBLESHOOTING
+# ============================
+with st.expander("🧪 Troubleshooting"):
+    st.markdown(
+        """
+        **Human Ears Mode — how it works:**
+
+        - **Voice Focus (server-side)** isolates speech and suppresses background noise
+          before audio reaches the model. This is the main noise killer.
+        - Use **far-field** for laptop/room mics (2 people in a room).
+        - Use **near-field** for headsets or phones held close.
+        - If your voice gets cut off, **lower the threshold** (e.g. 0.5).
+        - If background is still leaking, **raise the threshold** (e.g. 0.85).
+        - Do NOT enable client-side noisereduce — it introduces artifacts that hurt accuracy.
+
+        **Test order:**
+        1. Keep bandpass filter OFF.
+        2. Keep client attenuation OFF.
+        3. Set Voice Focus to far-field, threshold 0.7.
+        4. Record and check playback first.
+        5. If playback is clear but text is wrong → adjust Voice Focus threshold.
+        """
+    )
+
+with st.expander("ℹ️ Current configuration"):
+    st.write("Model: AssemblyAI Universal-3.5 Pro")
+    st.write(f"Voice Focus: {voice_focus_mode} (threshold: {voice_focus_threshold})")
+    st.write(f"Bandpass filter: {'ON' if enhance_audio else 'OFF'}")
+    st.write(f"Client attenuation: {'ON' if suppress_background else 'OFF'}")
+    st.write(f"Sound events: {'ON' if detect_events else 'OFF'}")
+    st.write("Transport: AssemblyAI WebSocket SDK")
