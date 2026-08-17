@@ -12,11 +12,11 @@ from dotenv import load_dotenv
 from streamlit_mic_recorder import mic_recorder
 from unidecode import unidecode
 
-============================
+#============================
 
-🖥️ STREAMLIT PAGE CONFIG
+#🖥️ STREAMLIT PAGE CONFIG
 
-============================
+#============================
 
 st.set_page_config(
     page_title="Speech to Text",
@@ -26,11 +26,11 @@ st.set_page_config(
 
 load_dotenv()
 
-============================
+
 
 🔑 DEEPGRAM API KEY
 
-============================
+
 
 Use .env or Streamlit Secrets.
 
