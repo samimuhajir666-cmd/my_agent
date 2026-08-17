@@ -1,10 +1,12 @@
-assemblyai
 streamlit
 streamlit-mic-recorder
-python-dotenv
 numpy
 scipy
 noisereduce
+python-dotenv
 unidecode
-requests
-
+deepgram-sdk
+panns-inference
+torch
+torchaudio
+librosa
