@@ -1,8 +1,8 @@
+assemblyai
 streamlit
-deepgram-sdk>=3.0.0
-noisereduce
+streamlit-mic-recorder
+python-dotenv
 numpy
 scipy
-streamlit-mic-recorder
+noisereduce
 unidecode
-python-dotenv
