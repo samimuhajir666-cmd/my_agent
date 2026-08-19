@@ -130,7 +130,7 @@ def transcribe_with_whisper(audio_buffer):
         transcription = client.audio.transcriptions.create(
             file=(audio_buffer.name, audio_buffer.read(), "audio/wav"),
             model="whisper-large-v3",
-            language="ur", 
+            language="en", 
             temperature=0.0,
         )
         raw_urdu_text = transcription.text.strip()
