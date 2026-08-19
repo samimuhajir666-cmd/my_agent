@@ -88,30 +88,20 @@ def normalize_and_prepare_audio(audio_bytes):
 # 🎙️ GROQ WHISPER TRANSCRIBE
 # ============================
 def transcribe_with_whisper(audio_buffer):
-    """Groq Whisper-Large-v3 Engine for High Precision & Soft Voice Handling"""
+    """Groq Whisper-Large-v3 Engine for High Precision & Roman Urdu Output"""
     try:
         transcription = client.audio.transcriptions.create(
             file=(audio_buffer.name, audio_buffer.read(), "audio/wav"),
-            language
             model="whisper-large-v3",
+            # 'en' language force karne se Urdu script (اردو) nahi aayegi, English/Roman alphabets hi aayenge
             language="en",
-            prompt=(
-                "Transcribe the spoken audio accurately in clean Roman Urdu or English. "
-                "Ignore background music, background noise, or filler sounds. "
-                "Do not hallucinate fake words if the voice is soft."
-            ),
-            temperature=0.0,  # 0.0 temperature ensures maximum deterministic accuracy
+            prompt="Transcribe Urdu audio into clean Roman Urdu using Latin alphabet, like: Jab khalifa thay unki ek aadat thi.",
+            temperature=0.0,
         )
         raw_text = transcription.text
         return clean_roman_script(raw_text)
     except Exception as e:
         raise RuntimeError(f"Whisper Transcription Error: {e}")
-
-
-
-
-
-
 # ============================
 # 🧠 SESSION STATE
 # ============================
