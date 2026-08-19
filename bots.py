@@ -152,7 +152,7 @@ if audio_output:
 # ============================
 st.divider()
 st.subheader("📝 Transcribed Text")
-if st.session_state.last_session_text := st.session_state.last_transcription:
+if st.session_state.last_transcription:
     safe_text = html.escape(st.session_state.last_transcription)
     st.markdown(
         f"""
