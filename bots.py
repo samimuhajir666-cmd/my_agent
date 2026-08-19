@@ -73,14 +73,34 @@ SYSTEM_PROMPT = (
     "Plotly, NumPy, API, AI and machine learning."
 )
 
+# Naya Updated Code
 def force_roman_script(text):
     if not text:
-        return text
-    has_non_ascii = bool(re.search(r'[^\x00-\x7F]', text))
-    if not has_non_ascii:
-        return text
-    return unidecode(text)
+        return ""
 
+    # Transliteration ke strange symbols aur apostrophes remove karne ke liye
+    text = re.sub(r"[’'‘`\^]", "", text)
+
+    # Weird spellings (iNsaan -> insaan, ziNdgii -> zindagi) ko clean karne ke liye
+    replacements = {
+        "iN": "in",
+        "aN": "an",
+        "uN": "un",
+        "eN": "en",
+        "N": "n",
+        "gii": "gi",
+        "uu": "u",
+        "aa": "a",
+        "DD": "d",
+        "TT": "t",
+        "RR": "r",
+        "khh": "kh",
+    }
+
+    for word, repl in replacements.items():
+        text = text.replace(word, repl)
+
+    return re.sub(r"\s+", " ", text).strip()
 # ============================
 # 😮 NON-SPEECH SOUND EVENT DETECTION
 # ============================
@@ -285,13 +305,13 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
 # These settings are intentionally conservative. The goal is to reject
 # only actual silence, not accidentally delete quiet words.
 
-MIN_RMS_ENERGY = 35.0
-MIN_DURATION_SECONDS = 0.45
+MIN_RMS_ENERGY = 15.0
+MIN_DURATION_SECONDS = 0.20
 MAX_DURATION_SECONDS = 120
 VAD_FRAME_MS = 30
 MIN_SPEECH_SECONDS = 0.20
 NOISE_FLOOR_PERCENTILE = 10
-SPEECH_ABOVE_NOISE_FACTOR = 2.0
+SPEECH_ABOVE_NOISE_FACTOR = 1.3
 SPEECH_LOW_HZ = 70
 SPEECH_HIGH_HZ = 7600
 
