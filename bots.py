@@ -6,19 +6,74 @@ import re
 import numpy as np
 import scipy.io.wavfile as wav
 import streamlit as st
-
 from dotenv import load_dotenv
 from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
 
+# ============================================================
+# LISTENER - FINAL SPEECH TO TEXT AGENT
+# ============================================================
+#
+# GOAL
+# ----
+# 1. Listen to English, Urdu, Roman Urdu, or mixed speech.
+# 2. Do NOT force Urdu through English recognition.
+# 3. Do NOT use an LLM to invent/answer anything.
+# 4. Do NOT use cough/laugh/breath detection.
+# 5. Do NOT use aggressive noise cancellation.
+# 6. Gently boost only genuinely quiet recordings.
+# 7. If the complete recording strongly looks like non-speech,
+#    return [unclear audio] instead of inventing a transcript.
+#
+# PIPELINE
+# --------
+# Microphone
+#     ↓
+# Original WAV
+#     ↓
+# Gentle quiet-voice boost (only when needed)
+#     ↓
+# Whisper Large-v3
+#     ↓
+# Quality gate
+#     ↓
+# Romanize only AFTER transcription
+#     ↓
+# Final text
+#
+# STREAMLIT CLOUD
+# ---------------
+# requirements.txt:
+#     streamlit
+#     groq
+#     python-dotenv
+#     scipy
+#     numpy
+#     streamlit-mic-recorder
+#
+# Streamlit Secrets:
+#     GROQ_API_KEY = "YOUR_NEW_KEY"
+#
+# ============================================================
+
+
+# ============================================================
+# 1. PAGE CONFIG
+# ============================================================
+
 st.set_page_config(
-    page_title="Speech to Text",
+    page_title="High-Precision Speech to Text",
     page_icon="🎤",
     layout="centered",
 )
 
 load_dotenv()
+
+
+# ============================================================
+# 2. API KEY
+# ============================================================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -30,7 +85,7 @@ if not GROQ_API_KEY:
 
 if not GROQ_API_KEY:
     st.error(
-        "GROQ_API_KEY not found. "
+        "GROQ_API_KEY was not found. "
         "Add it to .env or Streamlit Secrets."
     )
     st.stop()
@@ -46,21 +101,58 @@ except Exception as exc:
     st.stop()
 
 
+# ============================================================
+# 3. MODEL
+# ============================================================
 
 STT_MODEL = "whisper-large-v3"
+
+
+# ============================================================
+# 4. AUDIO SETTINGS
+# ============================================================
+
 MIN_DURATION_SECONDS = 0.30
 MAX_DURATION_SECONDS = 120.0
-MIN_RMS = 0.00010
 
+# Only reject an essentially empty recording.
+# This is deliberately very low so quiet speech is not rejected.
+MIN_RMS = 0.00015
+
+# Only recordings below this RMS are boosted.
 QUIET_RMS = 0.025
 
-MAX_GAIN = 3.0
+# Never amplify a quiet recording more than this much.
+MAX_QUIET_GAIN = 3.0
 
 
-MAX_NO_SPEECH_FOR_AUDIO = 0.90
-MAX_COMPRESSION_RATIO = 2.8
+# ============================================================
+# 5. QUALITY-GATE SETTINGS
+# ============================================================
+#
+# These are conservative engineering thresholds, not a guarantee.
+# Whisper's verbose JSON gives segment metadata that we can inspect.
+#
+# High no_speech_prob:
+#     model thinks the segment may not contain speech.
+#
+# Very low avg_logprob:
+#     model is uncertain about the generated tokens.
+#
+# We use both so "unclear audio" is safer than inventing words.
+# ============================================================
+
+MAX_NO_SPEECH_PROB = 0.80
+MIN_AVG_LOGPROB = -1.20
+
+# If a transcript is only one short word and the model is not
+# confident enough, we prefer [unclear audio].
+MIN_WORDS_FOR_WEAK_TRANSCRIPT = 2
 
 
+# ============================================================
+# 6. SESSION STATE
+# ============================================================
 
 if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
@@ -68,47 +160,42 @@ if "last_transcription" not in st.session_state:
 if "last_language" not in st.session_state:
     st.session_state.last_language = ""
 
+if "last_quality" not in st.session_state:
+    st.session_state.last_quality = ""
+
 if "last_audio" not in st.session_state:
     st.session_state.last_audio = None
 
-if "last_quality_note" not in st.session_state:
-    st.session_state.last_quality_note = ""
 
-def romanize_text(text):
+# ============================================================
+# 7. ROMANIZATION
+# ============================================================
+
+def romanize_text(text: str) -> str:
     """
-    Convert Urdu/Arabic script to approximate Roman text
-    AFTER transcription.
+    IMPORTANT: Do not run Unidecode on Urdu transcription.
 
-    IMPORTANT:
-    No global replacements such as:
-        N -> n
-        aa -> a
-        uu -> u
+    Unidecode produces machine transliteration such as:
+        myN / khhh / hyN
 
-    are used.
+    That is not natural Roman Urdu and was one of the reasons the
+    displayed Urdu results looked wrong. Keep the real Whisper text.
     """
 
     if not text:
         return ""
 
-    if not re.search(
-        r"[^\x00-\x7F]",
-        text,
-    ):
-        return text.strip()
-
-    try:
-        from unidecode import unidecode
-
-        return unidecode(
-            text
-        ).strip()
-
-    except Exception:
-        return text.strip()
+    return text.strip()
 
 
-def read_wav(audio_bytes):
+# ============================================================
+# 8. READ WAV
+# ============================================================
+
+def read_wav(audio_bytes: bytes):
+    """
+    Read the browser's WAV recording and convert it to mono float32.
+    """
 
     buffer = io.BytesIO(
         audio_bytes
@@ -120,12 +207,12 @@ def read_wav(audio_bytes):
 
     if sample_rate <= 0:
         raise ValueError(
-            "Invalid sample rate."
+            "Invalid WAV sample rate."
         )
 
     if audio is None or len(audio) == 0:
         raise ValueError(
-            "Empty recording."
+            "The recording contains no audio samples."
         )
 
     # Stereo -> mono
@@ -134,17 +221,15 @@ def read_wav(audio_bytes):
         "ndim",
         1,
     ) > 1:
-
         audio = audio.mean(
             axis=1
         )
 
-    # Integer -> float [-1, 1]
+    # Integer WAV -> float [-1, 1]
     if np.issubdtype(
         audio.dtype,
         np.integer,
     ):
-
         info = np.iinfo(
             audio.dtype
         )
@@ -160,9 +245,7 @@ def read_wav(audio_bytes):
             )
             / float(scale)
         )
-
     else:
-
         audio = audio.astype(
             np.float32
         )
@@ -186,13 +269,12 @@ def read_wav(audio_bytes):
     )
 
 
+# ============================================================
+# 9. AUDIO LEVELS
+# ============================================================
 
-def rms_level(audio):
-
-    if (
-        audio is None
-        or len(audio) == 0
-    ):
+def rms_level(audio) -> float:
+    if audio is None or len(audio) == 0:
         return 0.0
 
     return float(
@@ -206,11 +288,35 @@ def rms_level(audio):
     )
 
 
+def peak_level(audio) -> float:
+    if audio is None or len(audio) == 0:
+        return 0.0
+
+    return float(
+        np.max(
+            np.abs(
+                audio.astype(
+                    np.float64
+                )
+            )
+        )
+    )
+
+
 # ============================================================
 # 10. GENTLE QUIET-VOICE BOOST
 # ============================================================
 
 def gently_boost_quiet_voice(audio):
+    """
+    Only boost genuinely quiet recordings.
+
+    No:
+      - noise cancellation
+      - band-pass filter
+      - background suppression
+      - speech deletion
+    """
 
     audio = audio.astype(
         np.float32
@@ -220,7 +326,8 @@ def gently_boost_quiet_voice(audio):
         audio
     )
 
-    # Normal voice -> leave it untouched.
+    # Normal/loud recording:
+    # leave it completely alone.
     if rms >= QUIET_RMS:
         return audio
 
@@ -229,7 +336,7 @@ def gently_boost_quiet_voice(audio):
 
     gain = min(
         QUIET_RMS / rms,
-        MAX_GAIN,
+        MAX_QUIET_GAIN,
     )
 
     boosted = (
@@ -237,16 +344,11 @@ def gently_boost_quiet_voice(audio):
     )
 
     # Prevent clipping.
-    peak = float(
-        np.max(
-            np.abs(
-                boosted
-            )
-        )
+    peak = peak_level(
+        boosted
     )
 
     if peak > 0.95:
-
         boosted *= (
             0.95 / peak
         )
@@ -259,14 +361,13 @@ def gently_boost_quiet_voice(audio):
 
 
 # ============================================================
-# 11. FLOAT -> WAV
+# 11. FLOAT AUDIO -> WAV
 # ============================================================
 
-def to_wav_bytes(
+def audio_to_wav_bytes(
     audio,
     sample_rate,
 ):
-
     audio = np.clip(
         audio,
         -1.0,
@@ -279,17 +380,17 @@ def to_wav_bytes(
         np.int16
     )
 
-    buffer = io.BytesIO()
+    output = io.BytesIO()
 
     wav.write(
-        buffer,
+        output,
         sample_rate,
         int_audio,
     )
 
-    buffer.seek(0)
+    output.seek(0)
 
-    return buffer.read()
+    return output.read()
 
 
 # ============================================================
@@ -297,9 +398,13 @@ def to_wav_bytes(
 # ============================================================
 
 def prepare_audio(
-    audio_bytes,
-    boost_quiet=True,
+    audio_bytes: bytes,
+    boost_quiet: bool,
 ):
+    """
+    Preserve the original recording and create an optional
+    gently boosted version.
+    """
 
     sample_rate, audio = read_wav(
         audio_bytes
@@ -316,7 +421,6 @@ def prepare_audio(
         )
 
     if duration > MAX_DURATION_SECONDS:
-
         max_samples = int(
             MAX_DURATION_SECONDS
             * sample_rate
@@ -335,30 +439,30 @@ def prepare_audio(
         audio
     )
 
-    # Only reject completely empty/silent audio.
+    # Only reject an essentially empty recording.
     if rms < MIN_RMS:
-
         raise ValueError(
-            "Recording is essentially silent."
+            "The recording is essentially silent."
         )
 
-    if boost_quiet:
+    original_audio = (
+        audio.copy()
+    )
 
-        processed = (
+    if boost_quiet:
+        processed_audio = (
             gently_boost_quiet_voice(
                 audio
             )
         )
-
     else:
-
-        processed = (
+        processed_audio = (
             audio.copy()
         )
 
     processed_bytes = (
-        to_wav_bytes(
-            processed,
+        audio_to_wav_bytes(
+            processed_audio,
             sample_rate,
         )
     )
@@ -373,112 +477,53 @@ def prepare_audio(
 
 
 # ============================================================
-# 13. WHOLE-RECORDING QUALITY CHECK
+# 13. WHISPER SEGMENT QUALITY
 # ============================================================
 
-def whole_recording_quality(
-    transcription,
-):
+def segment_quality(segment):
+    """
+    Return:
+        text,
+        no_speech_prob,
+        avg_logprob
+    """
 
-    segments = getattr(
-        transcription,
-        "segments",
-        None,
-    ) or []
+    text = str(
+        getattr(
+            segment,
+            "text",
+            "",
+        )
+        or ""
+    ).strip()
 
-    if not segments:
-
-        # No metadata: don't reject useful text.
-        return {
-            "reject": False,
-            "reason": (
-                "No segment metadata available."
-            ),
-        }
-
-
-    # Collect metadata.
-    no_speech_values = []
-    compression_values = []
-
-    for segment in segments:
-
-        no_speech = getattr(
+    no_speech_prob = float(
+        getattr(
             segment,
             "no_speech_prob",
-            None,
+            0.0,
+        )
+        or 0.0
+    )
+
+    avg_logprob_value = getattr(
+        segment,
+        "avg_logprob",
+        None,
+    )
+
+    if avg_logprob_value is None:
+        avg_logprob = -0.5
+    else:
+        avg_logprob = float(
+            avg_logprob_value
         )
 
-        compression = getattr(
-            segment,
-            "compression_ratio",
-            None,
-        )
-
-        if no_speech is not None:
-
-            no_speech_values.append(
-                float(no_speech)
-            )
-
-        if compression is not None:
-
-            compression_values.append(
-                float(compression)
-            )
-
-
-    # --------------------------------------------------------
-    # Very strong no-speech signal for the WHOLE recording.
-    # --------------------------------------------------------
-
-    if (
-        no_speech_values
-        and max(
-            no_speech_values
-        ) >= MAX_NO_SPEECH_FOR_AUDIO
-        and all(
-            value >= MAX_NO_SPEECH_FOR_AUDIO
-            for value in no_speech_values
-        )
-    ):
-
-        return {
-            "reject": True,
-            "reason": (
-                "Whisper reported very high no-speech "
-                "probability for the whole recording."
-            ),
-        }
-
-
-    # --------------------------------------------------------
-    # Strong compression/hallucination signal across all
-    # segments. Use only as a secondary guard.
-    # --------------------------------------------------------
-
-    if (
-        compression_values
-        and all(
-            value > MAX_COMPRESSION_RATIO
-            for value in compression_values
-        )
-        and len(compression_values) >= 2
-    ):
-
-        return {
-            "reject": True,
-            "reason": (
-                "The transcription metadata strongly "
-                "resembles repeated/hallucinated text."
-            ),
-        }
-
-
-    return {
-        "reject": False,
-        "reason": "Passed whole-recording quality check.",
-    }
+    return (
+        text,
+        no_speech_prob,
+        avg_logprob,
+    )
 
 
 # ============================================================
@@ -486,16 +531,30 @@ def whole_recording_quality(
 # ============================================================
 
 def transcribe_with_whisper(
-    audio_bytes,
+    audio_bytes: bytes,
     debug=False,
 ):
+    """
+    Whisper Large-v3 only.
+
+    IMPORTANT FIX:
+    There is NO language="en".
+
+    The input can be:
+      - English
+      - Urdu
+      - Roman Urdu
+      - English + Urdu
+
+    We ask the model to transcribe, not translate or answer.
+    """
 
     audio_file = io.BytesIO(
         audio_bytes
     )
 
     audio_file.name = (
-        "recording.wav"
+        "input_speech.wav"
     )
 
     try:
@@ -505,43 +564,33 @@ def transcribe_with_whisper(
             .audio
             .transcriptions
             .create(
-
                 file=(
                     audio_file.name,
                     audio_file.read(),
                     "audio/wav",
                 ),
-
                 model=STT_MODEL,
 
-                # IMPORTANT:
-                # No language="en".
-                #
-                # The recording may contain:
-                # English
-                # Urdu
-                # Roman Urdu
-                # English + Urdu
+                # DO NOT force English here.
+                # Whisper must be free to recognize Urdu/English.
 
-                response_format=(
-                    "verbose_json"
-                ),
+                response_format="verbose_json",
 
+                # Segment metadata is useful for our quality gate.
                 timestamp_granularities=[
                     "segment"
                 ],
 
                 temperature=0.0,
 
-                # Small context hint only.
-                # Do not tell Whisper to translate.
+                # Context only.
+                # We do NOT tell Whisper to "convert" or "translate".
                 prompt=(
-                    "The speaker may speak English, "
-                    "Urdu, Roman Urdu, or mixed English "
-                    "and Urdu. Transcribe exactly what "
-                    "is spoken. Do not translate. "
-                    "Do not answer. Keep names and "
-                    "technical terms."
+                    "The speaker may use English, Urdu, "
+                    "Roman Urdu, or mixed English and Urdu. "
+                    "Transcribe the words that are actually spoken. "
+                    "Preserve names and technical terms. "
+                    "Do not translate or answer."
                 ),
             )
         )
@@ -556,7 +605,11 @@ def transcribe_with_whisper(
         ) from exc
 
 
-    text = str(
+    # --------------------------------------------------------
+    # Main transcript
+    # --------------------------------------------------------
+
+    full_text = str(
         getattr(
             transcription,
             "text",
@@ -565,7 +618,8 @@ def transcribe_with_whisper(
         or ""
     ).strip()
 
-    language = str(
+
+    detected_language = str(
         getattr(
             transcription,
             "language",
@@ -574,41 +628,149 @@ def transcribe_with_whisper(
         or ""
     )
 
-    quality = whole_recording_quality(
-        transcription
+
+    segments = (
+        getattr(
+            transcription,
+            "segments",
+            None,
+        )
+        or []
     )
 
 
-    if quality["reject"]:
+    # If segment metadata is unavailable, return the full text
+    # rather than silently discarding a valid transcription.
+    if not segments:
+
+        if not full_text:
+            return {
+                "text": "",
+                "language": detected_language,
+                "accepted": False,
+                "reason": "No transcript returned.",
+            }
 
         return {
-            "text": "",
-            "language": language,
-            "accepted": False,
-            "reason": quality["reason"],
+            "text": full_text,
+            "language": detected_language,
+            "accepted": True,
+            "reason": "No segment metadata returned.",
         }
 
 
-    if not text:
+    accepted_segments = []
+    rejected_segments = []
+
+
+    # --------------------------------------------------------
+    # Quality gate
+    # --------------------------------------------------------
+
+    for segment in segments:
+
+        (
+            segment_text,
+            no_speech_prob,
+            avg_logprob,
+        ) = segment_quality(
+            segment
+        )
+
+        if not segment_text:
+            continue
+
+        # Strong sign of silence/non-speech.
+        if (
+            no_speech_prob
+            >= MAX_NO_SPEECH_PROB
+        ):
+            rejected_segments.append(
+                {
+                    "text": segment_text,
+                    "reason": (
+                        f"no_speech_prob={no_speech_prob:.2f}"
+                    ),
+                }
+            )
+            continue
+
+        # Very weak token confidence.
+        if (
+            avg_logprob
+            < MIN_AVG_LOGPROB
+        ):
+            rejected_segments.append(
+                {
+                    "text": segment_text,
+                    "reason": (
+                        f"avg_logprob={avg_logprob:.2f}"
+                    ),
+                }
+            )
+            continue
+
+        accepted_segments.append(
+            segment_text
+        )
+
+
+    # --------------------------------------------------------
+    # If EVERYTHING is rejected:
+    # do not invent a transcript.
+    # --------------------------------------------------------
+
+    if not accepted_segments:
 
         return {
-            "text": "",
-            "language": language,
+            "text": "[unclear audio]",
+            "language": detected_language,
             "accepted": False,
             "reason": (
-                "Whisper returned no transcript."
+                "All returned segments failed the "
+                "conservative quality gate."
             ),
+            "rejected_segments": rejected_segments,
         }
 
 
-    # IMPORTANT:
-    # Return the COMPLETE transcript.
-    # We do NOT delete individual Urdu words or segments.
+    final_text = " ".join(
+        accepted_segments
+    ).strip()
+
+
+    # --------------------------------------------------------
+    # Single-word weak transcript protection
+    # --------------------------------------------------------
+
+    word_count = len(
+        final_text.split()
+    )
+
+    if (
+        word_count
+        < MIN_WORDS_FOR_WEAK_TRANSCRIPT
+        and rejected_segments
+    ):
+
+        return {
+            "text": "[unclear audio]",
+            "language": detected_language,
+            "accepted": False,
+            "reason": (
+                "Only a very short transcript remained while "
+                "other segments were rejected."
+            ),
+            "rejected_segments": rejected_segments,
+        }
+
+
     return {
-        "text": text,
-        "language": language,
+        "text": final_text,
+        "language": detected_language,
         "accepted": True,
-        "reason": quality["reason"],
+        "reason": "Passed quality gate.",
+        "rejected_segments": rejected_segments,
     }
 
 
@@ -621,40 +783,70 @@ def transcribe_audio(
     processed_bytes,
     debug=False,
 ):
+    """
+    Use the lightly boosted audio first.
 
-    # First try the gently boosted audio.
-    first = transcribe_with_whisper(
-        processed_bytes,
-        debug=debug,
+    If that produces no accepted transcript, send the untouched
+    original recording once.
+
+    We NEVER ask another AI to guess/correct the transcript.
+    """
+
+    first = (
+        transcribe_with_whisper(
+            processed_bytes,
+            debug=debug,
+        )
     )
 
+    first_text = str(
+        first.get("text")
+        or ""
+    ).strip()
 
-    # If good -> return it.
-    if first["accepted"]:
 
+    # Good result:
+    if (
+        first.get("accepted")
+        and first_text
+    ):
         return first
 
 
-    # If boosting changed the audio, give the original one
-    # chance. This is useful for quiet speech that was altered
-    # unexpectedly.
+    # If processing didn't change the audio, no need for a
+    # duplicate request.
     if (
         processed_bytes
-        != original_bytes
+        == original_bytes
     ):
+        return first
 
-        second = transcribe_with_whisper(
+
+    # Otherwise try original audio once.
+    second = (
+        transcribe_with_whisper(
             original_bytes,
             debug=debug,
         )
+    )
 
-        if second["accepted"]:
+    second_text = str(
+        second.get("text")
+        or ""
+    ).strip()
 
-            return second
+
+    # Prefer the accepted original result.
+    if second.get("accepted"):
+        return second
 
 
-    # Both are unclear.
-    return first
+    # If neither passed, keep the first result rather than
+    # inventing anything.
+    if first_text:
+        return first
+
+    return second
 
 
 # ============================================================
@@ -667,15 +859,15 @@ if "last_transcription" not in st.session_state:
 if "last_language" not in st.session_state:
     st.session_state.last_language = ""
 
-if "last_quality_note" not in st.session_state:
-    st.session_state.last_quality_note = ""
+if "last_quality" not in st.session_state:
+    st.session_state.last_quality = ""
 
 if "last_audio" not in st.session_state:
     st.session_state.last_audio = None
 
 
 # ============================================================
-# 17. UI
+# 17. PAGE UI
 # ============================================================
 
 st.title(
@@ -683,17 +875,17 @@ st.title(
 )
 
 st.caption(
-    "Groq Whisper Large-v3 • English + Urdu + Roman Urdu"
+    "Groq Whisper Large-v3 • English + Urdu + Mixed Speech"
 )
 
 st.info(
-    "This is STT only. It does not answer your questions "
-    "and does not use an LLM to invent text."
+    "The agent only transcribes speech. "
+    "It does not answer or invent a response."
 )
 
 
 # ============================================================
-# 18. SETTINGS
+# 18. CONTROLS
 # ============================================================
 
 col1, col2 = st.columns(
@@ -703,11 +895,11 @@ col1, col2 = st.columns(
 with col1:
 
     boost_quiet = st.checkbox(
-        "🔊 Gentle quiet-voice boost",
+        "🔊 Gently boost quiet voice",
         value=True,
         help=(
             "Only genuinely quiet recordings are amplified. "
-            "No noise cancellation."
+            "No noise cancellation is applied."
         ),
     )
 
@@ -732,8 +924,12 @@ st.write(
 )
 
 audio_output = mic_recorder(
-    start_prompt="🎤 Click to Start Recording",
-    stop_prompt="🛑 Stop Recording",
+    start_prompt=(
+        "🎤 Click to Start Recording"
+    ),
+    stop_prompt=(
+        "🛑 Stop Recording"
+    ),
     just_once=True,
     use_container_width=True,
     format="wav",
@@ -747,8 +943,10 @@ audio_output = mic_recorder(
 
 if audio_output:
 
-    audio_bytes = audio_output.get(
-        "bytes"
+    audio_bytes = (
+        audio_output.get(
+            "bytes"
+        )
     )
 
     if not audio_bytes:
@@ -759,6 +957,7 @@ if audio_output:
 
         st.stop()
 
+
     st.session_state.last_audio = (
         audio_bytes
     )
@@ -766,39 +965,55 @@ if audio_output:
 
     try:
 
+        # ----------------------------------------------------
+        # Prepare audio
+        # ----------------------------------------------------
+
         with st.spinner(
             "⏳ Preparing audio..."
         ):
 
-            prepared = prepare_audio(
-                audio_bytes,
-                boost_quiet=boost_quiet,
+            prepared = (
+                prepare_audio(
+                    audio_bytes,
+                    boost_quiet=boost_quiet,
+                )
             )
 
 
         original_bytes = (
-            prepared["original_bytes"]
+            prepared[
+                "original_bytes"
+            ]
         )
 
         processed_bytes = (
-            prepared["processed_bytes"]
-        )
-
-        duration = (
-            prepared["duration"]
+            prepared[
+                "processed_bytes"
+            ]
         )
 
         sample_rate = (
-            prepared["sample_rate"]
+            prepared[
+                "sample_rate"
+            ]
+        )
+
+        duration = (
+            prepared[
+                "duration"
+            ]
         )
 
         rms = (
-            prepared["rms"]
+            prepared[
+                "rms"
+            ]
         )
 
 
         # ----------------------------------------------------
-        # ORIGINAL RECORDING
+        # Original playback
         # ----------------------------------------------------
 
         st.subheader(
@@ -812,7 +1027,7 @@ if audio_output:
 
 
         # ----------------------------------------------------
-        # PROCESSED RECORDING
+        # Processed playback
         # ----------------------------------------------------
 
         if boost_quiet:
@@ -828,7 +1043,7 @@ if audio_output:
 
 
         # ----------------------------------------------------
-        # AUDIO INFO
+        # Audio information
         # ----------------------------------------------------
 
         with st.expander(
@@ -836,7 +1051,7 @@ if audio_output:
         ):
 
             st.write(
-                f"Duration: {duration:.2f} sec"
+                f"Duration: {duration:.2f} seconds"
             )
 
             st.write(
@@ -844,7 +1059,7 @@ if audio_output:
             )
 
             st.write(
-                f"RMS level: {rms:.5f}"
+                f"RMS: {rms:.5f}"
             )
 
             st.write(
@@ -852,7 +1067,7 @@ if audio_output:
             )
 
             st.write(
-                "Background speaker suppression: OFF"
+                "Background-speaker suppression: OFF"
             )
 
             st.write(
@@ -865,17 +1080,19 @@ if audio_output:
 
 
         # ----------------------------------------------------
-        # TRANSCRIPTION
+        # Transcription
         # ----------------------------------------------------
 
         with st.spinner(
             "⚡ Whisper Large-v3 is listening..."
         ):
 
-            result = transcribe_audio(
-                original_bytes,
-                processed_bytes,
-                debug=debug_mode,
+            result = (
+                transcribe_audio(
+                    original_bytes,
+                    processed_bytes,
+                    debug=debug_mode,
+                )
             )
 
 
@@ -887,7 +1104,6 @@ if audio_output:
             or ""
         ).strip()
 
-
         detected_language = str(
             result.get(
                 "language",
@@ -896,7 +1112,6 @@ if audio_output:
             or ""
         )
 
-
         accepted = bool(
             result.get(
                 "accepted",
@@ -904,8 +1119,7 @@ if audio_output:
             )
         )
 
-
-        quality_note = str(
+        quality_reason = str(
             result.get(
                 "reason",
                 "",
@@ -915,12 +1129,14 @@ if audio_output:
 
 
         # ----------------------------------------------------
-        # ONLY romanize accepted transcript.
+        # Romanize ONLY after accepted transcription
         # ----------------------------------------------------
 
         if (
             accepted
             and raw_text
+            and raw_text
+            != "[unclear audio]"
         ):
 
             final_text = romanize_text(
@@ -935,19 +1151,18 @@ if audio_output:
                 detected_language
             )
 
-            st.session_state.last_quality_note = (
-                quality_note
+            st.session_state.last_quality = (
+                quality_reason
             )
 
             st.success(
                 "✅ Transcription complete!"
             )
 
+
         else:
 
-            # IMPORTANT:
-            # Never show a guessed transcription when the
-            # complete recording looks like non-speech.
+            # Do not show a guessed transcript.
             st.session_state.last_transcription = (
                 "[unclear audio]"
             )
@@ -956,8 +1171,8 @@ if audio_output:
                 detected_language
             )
 
-            st.session_state.last_quality_note = (
-                quality_note
+            st.session_state.last_quality = (
+                quality_reason
             )
 
             st.warning(
@@ -986,7 +1201,6 @@ st.subheader(
     "📝 Transcribed Text"
 )
 
-
 if st.session_state.last_transcription:
 
     safe_text = html.escape(
@@ -994,38 +1208,12 @@ if st.session_state.last_transcription:
     )
 
     st.markdown(
-        f"""
-        <div style="
-            padding:18px;
-            border-radius:10px;
-            background:#ffffff;
-            border:1px solid #dcdcdc;
-            box-shadow:0 2px 5px rgba(0,0,0,0.05);
-        ">
-
-            <div style="
-                font-weight:bold;
-                font-size:14px;
-                color:#555555;
-                margin-bottom:8px;
-            ">
-                Result:
-            </div>
-
-            <div style="
-                font-size:18px;
-                color:#111111;
-                line-height:1.5;
-                font-weight:500;
-            ">
-                {safe_text}
-            </div>
-
-        </div>
-        """,
+        f"""<div style="padding:18px;border-radius:10px;background:#ffffff;border:1px solid #dcdcdc;box-shadow:0 2px 5px rgba(0,0,0,0.05);">
+<div style="font-weight:bold;font-size:14px;color:#555555;margin-bottom:8px;">Result:</div>
+<div style="font-size:18px;color:#111111;line-height:1.5;font-weight:500;">{safe_text}</div>
+</div>""",
         unsafe_allow_html=True,
     )
-
 
     if st.session_state.last_language:
 
@@ -1034,12 +1222,11 @@ if st.session_state.last_transcription:
             f"{st.session_state.last_language}"
         )
 
-
-    if st.session_state.last_quality_note:
+    if st.session_state.last_quality:
 
         st.caption(
             "Quality check: "
-            f"{st.session_state.last_quality_note}"
+            f"{st.session_state.last_quality}"
         )
 
 else:
@@ -1050,7 +1237,7 @@ else:
 
 
 # ============================================================
-# 22. CONTROLS
+# 22. BUTTONS
 # ============================================================
 
 st.divider()
@@ -1058,7 +1245,6 @@ st.divider()
 col1, col2 = st.columns(
     2
 )
-
 
 with col1:
 
@@ -1089,14 +1275,14 @@ with col2:
 
         st.session_state.last_transcription = ""
         st.session_state.last_language = ""
-        st.session_state.last_quality_note = ""
+        st.session_state.last_quality = ""
         st.session_state.last_audio = None
 
         st.rerun()
 
 
 # ============================================================
-# 23. CURRENT CONFIGURATION
+# 23. FINAL CONFIGURATION
 # ============================================================
 
 with st.expander(
@@ -1104,7 +1290,7 @@ with st.expander(
 ):
 
     st.write(
-        "Provider: Groq"
+        "STT provider: Groq Whisper"
     )
 
     st.write(
@@ -1116,7 +1302,7 @@ with st.expander(
     )
 
     st.write(
-        "Quiet voice boost:",
+        "Quiet-voice boost:",
         "ON" if boost_quiet else "OFF",
     )
 
@@ -1129,13 +1315,13 @@ with st.expander(
     )
 
     st.write(
-        "Sound-event detection: OFF"
+        "Cough/laugh/breath detection: OFF"
     )
 
     st.write(
-        "LLM: OFF"
+        "LLM answer generation: OFF"
     )
 
     st.write(
-        "Hallucination guard: whole-recording only"
+        "Unclear speech handling: [unclear audio]"
     )
