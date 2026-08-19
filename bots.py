@@ -2,8 +2,8 @@ import html
 import io
 import os
 import re
-import scipy.io.wavfile as wav
 import numpy as np
+import scipy.io.wavfile as wav
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
@@ -13,7 +13,7 @@ from streamlit_mic_recorder import mic_recorder
 # 🖥️ STREAMLIT PAGE CONFIG
 # ============================
 st.set_page_config(
-    page_title="Speech to Text (Whisper)",
+    page_title="High-Precision Speech to Text",
     page_icon="🎤",
     layout="centered",
 )
@@ -30,7 +30,7 @@ if not GROQ_API_KEY:
         GROQ_API_KEY = None
 
 if not GROQ_API_KEY:
-    st.error("GROQ_API_KEY not found. Please set GROQ_API_KEY in .env file.")
+    st.error("GROQ_API_KEY not found. Please set GROQ_API_KEY in .env file or Streamlit Secrets.")
     st.stop()
 
 client = Groq(api_key=GROQ_API_KEY)
@@ -41,7 +41,7 @@ client = Groq(api_key=GROQ_API_KEY)
 def clean_roman_script(text):
     if not text:
         return ""
-    # Diacritics aur strange symbols remove karne ke liye
+    # Remove diacritics and strange accents
     text = re.sub(r"[’'‘`\^\~]", "", text)
     
     replacements = {
@@ -72,8 +72,7 @@ def normalize_and_prepare_audio(audio_bytes):
     if max_val > 0:
         target_peak = 28000.0  # Max amplitude peak
         gain = target_peak / max_val
-        # Limit extreme boost to prevent noise distortion
-        gain = min(gain, 10.0) 
+        gain = min(gain, 10.0) # Limit extreme boost to prevent noise distortion
         audio_data = audio_data * gain
 
     audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
@@ -85,23 +84,69 @@ def normalize_and_prepare_audio(audio_bytes):
     return output_buffer
 
 # ============================
+# 🤖 URDU TO ROMAN URDU LLM CONVERTER
+# ============================
+def convert_urdu_to_roman(text):
+    """Accurately converts Urdu script / mixed text to clean Roman Urdu."""
+    if not text or len(text.strip()) == 0:
+        return ""
+
+    # Known Whisper silence hallucinations list
+    hallucinations = [
+        "satsang with mooji", "ignore background", "subtitles by",
+        "amara.org", "thank you for watching", "mb1", "subscribe"
+    ]
+    if any(h in text.lower() for h in hallucinations):
+        return ""
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an exact phonetic transliterator from Urdu/Hindi to Roman Urdu (Latin Script). "
+                        "CRITICAL RULES:\n"
+                        "1. Convert the input text into clean, natural Roman Urdu/English.\n"
+                        "2. DO NOT translate the meaning to English. Keep the exact words spoken (e.g. 'Jahil ke bacho ko' -> 'Jahil ke bacho ko').\n"
+                        "3. Do NOT add explanations, notes, or quotes. Output ONLY the converted text."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.0,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        # Fallback to raw text if LLM call fails
+        return text
+
+# ============================
 # 🎙️ GROQ WHISPER TRANSCRIBE
 # ============================
 def transcribe_with_whisper(audio_buffer):
-    """Groq Whisper-Large-v3 Engine for High Precision & Roman Urdu Output"""
+    """Groq Whisper Engine + LLM Roman Urdu Normalizer"""
     try:
+        # Step 1: Capture native Urdu speech accurately with Urdu language setting
         transcription = client.audio.transcriptions.create(
             file=(audio_buffer.name, audio_buffer.read(), "audio/wav"),
             model="whisper-large-v3",
-            # 'en' language force karne se Urdu script (اردو) nahi aayegi, English/Roman alphabets hi aayenge
-            language="en",
-            prompt="Transcribe Urdu audio into clean Roman Urdu using Latin alphabet, like: Jab khalifa thay unki ek aadat thi. don,t translate any sentence or any thing just generate text as you correct listen with full greate accuracy",
+            language="ur",  # Crucial: Use native Urdu language for 100% phonetic audio capture
             temperature=0.0,
         )
-        raw_text = transcription.text
-        return clean_roman_script(raw_text)
+        raw_urdu_text = transcription.text.strip()
+
+        if not raw_urdu_text:
+            return ""
+
+        # Step 2: Convert native Urdu script into clean Roman Urdu
+        roman_text = convert_urdu_to_roman(raw_urdu_text)
+        return clean_roman_script(roman_text)
+
     except Exception as e:
         raise RuntimeError(f"Whisper Transcription Error: {e}")
+
 # ============================
 # 🧠 SESSION STATE
 # ============================
@@ -112,7 +157,7 @@ if "last_transcription" not in st.session_state:
 # 🖥️ UI INTERFACE
 # ============================
 st.title("🎤 High-Precision Speech to Text")
-st.caption("Powered by Groq Whisper-Large-v3 • Auto Soft-Voice Boosting")
+st.caption("Powered by Groq Whisper-Large-v3 & Llama-3.3 • Auto Soft-Voice Boosting")
 
 st.info("Press Start, speak (even softly), and press Stop.")
 
@@ -129,11 +174,11 @@ audio_output = mic_recorder(
 if audio_output:
     audio_bytes = audio_output.get("bytes")
     if audio_bytes:
-        with st.spinner("⚡ Processing & Transcribing with Whisper-Large-v3..."):
+        with st.spinner("⚡ Processing & Transcribing with High Precision..."):
             try:
                 # 1. Boost soft audio
                 boosted_audio = normalize_and_prepare_audio(audio_bytes)
-                # 2. Transcribe
+                # 2. Transcribe & Convert
                 result_text = transcribe_with_whisper(boosted_audio)
 
                 if result_text:
