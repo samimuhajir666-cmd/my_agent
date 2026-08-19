@@ -95,7 +95,7 @@ def transcribe_with_whisper(audio_buffer):
             model="whisper-large-v3",
             # 'en' language force karne se Urdu script (اردو) nahi aayegi, English/Roman alphabets hi aayenge
             language="en",
-            prompt="Transcribe Urdu audio into clean Roman Urdu using Latin alphabet, like: Jab khalifa thay unki ek aadat thi.",
+            prompt="Transcribe Urdu audio into clean Roman Urdu using Latin alphabet, like: Jab khalifa thay unki ek aadat thi. don,t translate any sentence or any thing just generate text as you correct listen with full greate accuracy",
             temperature=0.0,
         )
         raw_text = transcription.text
