@@ -41,7 +41,7 @@ client = Groq(api_key=GROQ_API_KEY)
 def clean_roman_script(text):
     if not text:
         return ""
-    # Remove diacritics and strange accents
+    # Remove unnecessary accent symbols
     text = re.sub(r"[’'‘`\^\~]", "", text)
     
     replacements = {
@@ -58,7 +58,7 @@ def clean_roman_script(text):
 # 🎚️ AUDIO NORMALIZER (SOFT VOICE BOOST)
 # ============================
 def normalize_and_prepare_audio(audio_bytes):
-    """Halki/dheemi awaz ko auto-boost karta hai taake STT misread na kare."""
+    """Halki awaz ko boost karta hai taake Whisper sahi sune."""
     audio_file = io.BytesIO(audio_bytes)
     sample_rate, audio_data = wav.read(audio_file)
 
@@ -68,11 +68,10 @@ def normalize_and_prepare_audio(audio_bytes):
     audio_data = audio_data.astype(np.float32)
     max_val = np.max(np.abs(audio_data))
 
-    # Dynamic Audio Gain Adjustment (If user speaks softly)
     if max_val > 0:
-        target_peak = 28000.0  # Max amplitude peak
+        target_peak = 28000.0  
         gain = target_peak / max_val
-        gain = min(gain, 10.0) # Limit extreme boost to prevent noise distortion
+        gain = min(gain, 10.0) 
         audio_data = audio_data * gain
 
     audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
@@ -84,10 +83,10 @@ def normalize_and_prepare_audio(audio_bytes):
     return output_buffer
 
 # ============================
-# 🤖 URDU TO ROMAN URDU LLM CONVERTER
+# 🤖 URDU TO ROMAN URDU CONVERTER
 # ============================
 def convert_urdu_to_roman(text):
-    """Accurately converts Urdu script / mixed text to clean Roman Urdu."""
+    """Urdu script ko fast Roman Urdu mein convert karta hai."""
     if not text or len(text.strip()) == 0:
         return ""
 
@@ -106,11 +105,11 @@ def convert_urdu_to_roman(text):
                 {
                     "role": "system",
                     "content": (
-                        "You are an exact phonetic transliterator from Urdu/Hindi to Roman Urdu (Latin Script). "
+                        "You are an exact phonetic transliterator from Urdu to Roman Urdu (Latin Script).\n"
                         "CRITICAL RULES:\n"
-                        "1. Convert the input text into clean, natural Roman Urdu/English.\n"
-                        "2. DO NOT translate the meaning to English. Keep the exact words spoken (e.g. 'Jahil ke bacho ko' -> 'Jahil ke bacho ko').\n"
-                        "3. Do NOT add explanations, notes, or quotes. Output ONLY the converted text."
+                        "1. Convert the input Urdu text into clean, natural Roman Urdu (English alphabet).\n"
+                        "2. DO NOT translate the meaning to English. Keep the exact words spoken (e.g. 'جہاں خلیفہ تھے' -> 'Jahan khalifa thay').\n"
+                        "3. Do NOT add explanations, notes, or quotes. Output ONLY the Roman Urdu text."
                     ),
                 },
                 {"role": "user", "content": text},
@@ -119,20 +118,19 @@ def convert_urdu_to_roman(text):
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        # Fallback to raw text if LLM call fails
         return text
 
 # ============================
 # 🎙️ GROQ WHISPER TRANSCRIBE
 # ============================
 def transcribe_with_whisper(audio_buffer):
-    """Groq Whisper Engine + LLM Roman Urdu Normalizer"""
+    """Whisper + Llama Pipeline for Perfect Roman Urdu"""
     try:
-        # Step 1: Capture native Urdu speech accurately with Urdu language setting
+        # Step 1: Speech capture in Urdu
         transcription = client.audio.transcriptions.create(
             file=(audio_buffer.name, audio_buffer.read(), "audio/wav"),
             model="whisper-large-v3",
-            language="ur",  # Crucial: Use native Urdu language for 100% phonetic audio capture
+            language="ur", 
             temperature=0.0,
         )
         raw_urdu_text = transcription.text.strip()
@@ -140,7 +138,7 @@ def transcribe_with_whisper(audio_buffer):
         if not raw_urdu_text:
             return ""
 
-        # Step 2: Convert native Urdu script into clean Roman Urdu
+        # Step 2: Convert to Roman Urdu
         roman_text = convert_urdu_to_roman(raw_urdu_text)
         return clean_roman_script(roman_text)
 
@@ -157,9 +155,9 @@ if "last_transcription" not in st.session_state:
 # 🖥️ UI INTERFACE
 # ============================
 st.title("🎤 High-Precision Speech to Text")
-st.caption("Powered by Groq Whisper-Large-v3 & Llama-3.3 • Auto Soft-Voice Boosting")
+st.caption("Powered by Groq Whisper-Large-v3 & Llama-3.3 • Auto Roman Urdu Output")
 
-st.info("Press Start, speak (even softly), and press Stop.")
+st.info("Press Start, speak in Urdu, and press Stop.")
 
 st.subheader("🎤 Voice Input")
 audio_output = mic_recorder(
@@ -174,16 +172,14 @@ audio_output = mic_recorder(
 if audio_output:
     audio_bytes = audio_output.get("bytes")
     if audio_bytes:
-        with st.spinner("⚡ Processing & Transcribing with High Precision..."):
+        with st.spinner("⚡ Transcribing into Roman Urdu..."):
             try:
-                # 1. Boost soft audio
                 boosted_audio = normalize_and_prepare_audio(audio_bytes)
-                # 2. Transcribe & Convert
                 result_text = transcribe_with_whisper(boosted_audio)
 
                 if result_text:
                     st.session_state.last_transcription = result_text
-                    st.success("✅ Transcription Complete!")
+                    st.success("✅ Complete!")
                 else:
                     st.warning("⚠️ No speech detected.")
             except Exception as e:
@@ -193,7 +189,7 @@ if audio_output:
 # 📝 DISPLAY OUTPUT
 # ============================
 st.divider()
-st.subheader("📝 Transcribed Text")
+st.subheader("📝 Transcribed Text (Roman Urdu)")
 if st.session_state.last_transcription:
     safe_text = html.escape(st.session_state.last_transcription)
     st.markdown(
@@ -218,7 +214,7 @@ st.divider()
 col1, col2 = st.columns(2)
 with col1:
     if st.button("🛑 Save Text", use_container_width=True):
-        st.success("Text locked in session.")
+        st.success("Text saved!")
 with col2:
     if st.button("🗑️ Clear Text", use_container_width=True):
         st.session_state.last_transcription = ""
