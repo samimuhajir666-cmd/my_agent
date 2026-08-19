@@ -92,7 +92,9 @@ def transcribe_with_whisper(audio_buffer):
     try:
         transcription = client.audio.transcriptions.create(
             file=(audio_buffer.name, audio_buffer.read(), "audio/wav"),
+            language
             model="whisper-large-v3",
+            language="en",
             prompt=(
                 "Transcribe the spoken audio accurately in clean Roman Urdu or English. "
                 "Ignore background music, background noise, or filler sounds. "
@@ -104,6 +106,11 @@ def transcribe_with_whisper(audio_buffer):
         return clean_roman_script(raw_text)
     except Exception as e:
         raise RuntimeError(f"Whisper Transcription Error: {e}")
+
+
+
+
+
 
 # ============================
 # 🧠 SESSION STATE
