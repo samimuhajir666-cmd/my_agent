@@ -9,6 +9,7 @@ import numpy as np
 import requests
 import streamlit as st
 from dotenv import load_dotenv
+from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
 # ============================
@@ -25,22 +26,63 @@ load_dotenv()
 # 🔑 API KEYS CONFIGURATION
 # ============================
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
 if not DEEPGRAM_API_KEY:
     try:
         DEEPGRAM_API_KEY = st.secrets.get("DEEPGRAM_API_KEY")
     except Exception:
         DEEPGRAM_API_KEY = None
 
+if not GROQ_API_KEY:
+    try:
+        GROQ_API_KEY = st.secrets.get("GROQ_API_KEY")
+    except Exception:
+        GROQ_API_KEY = None
+
 if not DEEPGRAM_API_KEY:
     st.error("DEEPGRAM_API_KEY not found. Put it in .env or Streamlit Secrets.")
     st.stop()
+
+# ============================
+# 🔤 ANY SCRIPT TO ROMAN TRANSLITERATION
+# ============================
+def convert_to_roman_script(text):
+    """Converts text from any script (Urdu, Hindi, Arabic, etc.) into Roman/Latin script using Groq."""
+    if not text:
+        return ""
+    if not GROQ_API_KEY:
+        return text
+
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict transliterator. Transliterate any text provided "
+                        "into Roman script (Latin letters/English alphabet). "
+                        "Do NOT translate the meaning, just write the spoken words using English characters. "
+                        "If the text is already in Roman script/English, return it unchanged. "
+                        "Do not add explanation, notes, or meta text. Output ONLY the transliterated result."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.1,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return text
 
 # ============================
 # 🎙️ DEEPGRAM CONFIGURATION
 # ============================
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 DEEPGRAM_MODEL = "nova-3"
-DEEPGRAM_LANGUAGE = "ur"  # 🎯 Fixed: Multi/Hindi ki jagah Urdu prefer ki hai
+DEEPGRAM_LANGUAGE = "multi"  # Auto detect languages
 DEEPGRAM_TIMEOUT = 60
 DEEPGRAM_CONFIDENCE_THRESHOLD = 0.35
 
@@ -293,8 +335,11 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
             if confidences:
                 confidence = float(np.mean(confidences))
 
+    # Convert any detected script (Urdu/Hindi) into Roman Script
+    roman_transcript = convert_to_roman_script(transcript)
+
     return {
-        "text": force_roman_script(transcript),
+        "text": force_roman_script(roman_transcript),
         "confidence": confidence,
         "raw": data,
     }
@@ -497,7 +542,7 @@ if "last_sample_rate" not in st.session_state:
 load_css("style.css")
 load_html("index.html")
 st.title("🎤 SPEECH TO TEXT")
-st.caption("Deepgram Nova-3 • Clean Roman Urdu & English")
+st.caption("Deepgram Nova-3 • Clean Roman Output")
 
 st.info(
     "Record your voice or play audio. Keep Light audio enhancement OFF for songs/music."
@@ -619,7 +664,7 @@ if audio_output:
                     st.exception(e)
 
 # ============================
-# 📝 DISPLAY OUTPUT (FIXED VISIBILITY CSS)
+# 📝 DISPLAY OUTPUT
 # ============================
 st.divider()
 st.subheader("📝 Transcribed Text")
