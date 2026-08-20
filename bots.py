@@ -142,8 +142,8 @@ MAX_QUIET_GAIN = 3.0
 # We use both so "unclear audio" is safer than inventing words.
 # ============================================================
 
-MAX_NO_SPEECH_PROB = 0.80
-MIN_AVG_LOGPROB = -1.20
+MAX_NO_SPEECH_PROB = 0.85
+MIN_AVG_LOGPROB = -1.40
 
 # If a transcript is only one short word and the model is not
 # confident enough, we prefer [unclear audio].
@@ -581,16 +581,15 @@ def transcribe_with_whisper(
                     "segment"
                 ],
 
-                temperature=0.0,
+                temperature=0.4,
 
                 # Context only.
                 # We do NOT tell Whisper to "convert" or "translate".
                 prompt=(
-                    "The speaker may use English, Urdu, "
-                    "Roman Urdu, or mixed English and Urdu. "
-                    "Transcribe the words that are actually spoken. "
-                    "Preserve names and technical terms. "
-                    "Do not translate or answer."
+                    "Examples of expected speech: 'main theek hoon', 'kya haal hai', "
+                    "'yes I need help', 'payment failed', 'P-512 error', "
+                    "'mera terminal kaam nahi kar raha', 'hello agent'. "
+                    "Transcribe exactly what is spoken. Do not translate or answer."
                 ),
             )
         )
