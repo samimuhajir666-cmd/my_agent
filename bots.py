@@ -2,11 +2,11 @@ import html
 import io
 import os
 import re
-import scipy.io.wavfile as wav
-import scipy.signal as signal
 import dotenv
 import numpy as np
 import requests
+import scipy.io.wavfile as wav
+import scipy.signal as signal
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
@@ -44,14 +44,17 @@ if not DEEPGRAM_API_KEY:
     st.error("DEEPGRAM_API_KEY not found. Put it in .env or Streamlit Secrets.")
     st.stop()
 
+
 # ============================
 # 🔤 ANY SCRIPT TO ROMAN TRANSLITERATION
 # ============================
 def convert_to_roman_script(text):
-    """Converts text from any script (Urdu, Hindi, Arabic, etc.) into Roman/Latin script using Groq."""
-    if not text:
+    """Converts Urdu/Hindi or any other script into pure Roman/English script using Groq."""
+    if not text or not text.strip():
         return ""
+
     if not GROQ_API_KEY:
+        st.error("⚠️ GROQ_API_KEY is missing! Please set it in .env or Secrets.")
         return text
 
     try:
@@ -62,20 +65,24 @@ def convert_to_roman_script(text):
                 {
                     "role": "system",
                     "content": (
-                        "You are a strict transliterator. Transliterate any text provided "
-                        "into Roman script (Latin letters/English alphabet). "
-                        "Do NOT translate the meaning, just write the spoken words using English characters. "
-                        "If the text is already in Roman script/English, return it unchanged. "
-                        "Do not add explanation, notes, or meta text. Output ONLY the transliterated result."
+                        "You are an absolute, strictly restricted transliterator. "
+                        "Your ONLY job is to convert any Urdu, Hindi, Arabic, or other script text into standard English/Latin characters (Roman Urdu / Roman Script).\n\n"
+                        "STRICT RULES:\n"
+                        "1. DO NOT output any Devanagari (Hindi) or Perso-Arabic (Urdu) letters under any circumstances.\n"
+                        "2. DO NOT translate the meaning or explain the text.\n"
+                        "3. DO NOT hallucinate or guess if the input is silent or empty.\n"
+                        "4. Output strictly English letters (a-z, A-Z) and standard punctuation only."
                     ),
                 },
                 {"role": "user", "content": text},
             ],
-            temperature=0.1,
+            temperature=0.0,  # Zero temperature prevents hallucination
         )
         return response.choices[0].message.content.strip()
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ Groq Transliteration Error: {e}")
         return text
+
 
 # ============================
 # 🎙️ DEEPGRAM CONFIGURATION
@@ -116,6 +123,7 @@ DEEPGRAM_KEYTERMS = [
     "CSS",
 ]
 
+
 # ============================
 # 🧹 CLEAN TRANSLITERATION FUNCTION
 # ============================
@@ -124,6 +132,8 @@ def force_roman_script(text):
     if not text:
         return ""
 
+    # Remove non-English/Devanagari/Arabic characters completely as a safety net
+    text = re.sub(r"[\u0600-\u06FF\u0900-\u097F]", "", text)
     text = re.sub(r"[’'‘`\^\~]", "", text)
 
     replacements = {
@@ -259,7 +269,7 @@ def detect_sound_events(audio_data, sample_rate):
 
 
 # ============================
-# 🎙️ DEEPGRAM TRANSCRIBE
+# 🎙️ DEEPGRAM TRANSCRIBE (FIXED)
 # ============================
 def transcribe_with_deepgram(processed_bytes, debug=False):
     params = [
@@ -335,7 +345,11 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
             if confidences:
                 confidence = float(np.mean(confidences))
 
-    # Convert any detected script (Urdu/Hindi) into Roman Script
+    # Agar Deepgram se koi clear text na mila ho to Groq call bilkul mat chalao
+    if not transcript.strip():
+        return {"text": "", "confidence": 0.0, "raw": data}
+
+    # Convert detected script into Roman Script (Groq)
     roman_transcript = convert_to_roman_script(transcript)
 
     return {
