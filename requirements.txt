@@ -7,7 +7,8 @@ torchaudio
 librosa
 streamlit
 streamlit-mic-recorder
-groq
 scipy
 numpy
 python-dotenv
+
+
