@@ -32,9 +32,7 @@ if not DEEPGRAM_API_KEY:
         DEEPGRAM_API_KEY = None
 
 if not DEEPGRAM_API_KEY:
-    st.error(
-        "DEEPGRAM_API_KEY not found. Put it in .env or Streamlit Secrets."
-    )
+    st.error("DEEPGRAM_API_KEY not found. Put it in .env or Streamlit Secrets.")
     st.stop()
 
 # ============================
@@ -42,7 +40,7 @@ if not DEEPGRAM_API_KEY:
 # ============================
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 DEEPGRAM_MODEL = "nova-3"
-DEEPGRAM_LANGUAGE = "multi"
+DEEPGRAM_LANGUAGE = "ur"  # 🎯 Fixed: Multi/Hindi ki jagah Urdu prefer ki hai
 DEEPGRAM_TIMEOUT = 60
 DEEPGRAM_CONFIDENCE_THRESHOLD = 0.35
 
@@ -84,10 +82,8 @@ def force_roman_script(text):
     if not text:
         return ""
 
-    # Remove non-standard characters, accents & diacritics
     text = re.sub(r"[’'‘`\^\~]", "", text)
 
-    # Standardize common phonetic transliteration patterns
     replacements = {
         "iN": "in",
         "aN": "an",
@@ -107,7 +103,6 @@ def force_roman_script(text):
     for word, repl in replacements.items():
         text = text.replace(word, repl)
 
-    # Cleanup multiple spaces
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -551,7 +546,7 @@ audio_output = mic_recorder(
 )
 
 # ============================
-# 🧠 TRANSCRIPTION LOGIC (FIXED — Confidence Check)
+# 🧠 TRANSCRIPTION LOGIC
 # ============================
 if audio_output:
     audio_bytes = audio_output.get("bytes")
@@ -607,14 +602,14 @@ if audio_output:
                     if event_tags:
                         text_from_voice = f"{text_from_voice} {event_tags}".strip()
 
-                # 🔥 FIX: Confidence check — 0.50 se neeche text mat dikhao
-                if text_from_voice and confidence >= 0.50:
+                if text_from_voice and confidence >= 0.35:
                     st.session_state.last_transcription = text_from_voice
                     st.session_state.last_confidence = confidence
                     st.success("✅ Complete!")
-                elif text_from_voice and confidence < 0.50:
+                elif text_from_voice and confidence < 0.35:
                     st.warning("⚠️ Low confidence transcription. Please speak clearly.")
-                    st.session_state.last_transcription = ""
+                    st.session_state.last_transcription = text_from_voice
+                    st.session_state.last_confidence = confidence
                 else:
                     st.warning("⚠️ No clear speech detected.")
 
@@ -624,7 +619,7 @@ if audio_output:
                     st.exception(e)
 
 # ============================
-# 📝 DISPLAY OUTPUT
+# 📝 DISPLAY OUTPUT (FIXED VISIBILITY CSS)
 # ============================
 st.divider()
 st.subheader("📝 Transcribed Text")
@@ -632,9 +627,9 @@ if st.session_state.last_transcription:
     safe_text = html.escape(st.session_state.last_transcription)
     st.markdown(
         f"""
-        <div class="output-card" style="padding: 15px; border-radius: 8px; background-color: #f0f2f6;">
-            <div class="output-title" style="font-weight: bold; margin-bottom: 5px;">Result:</div>
-            <div class="output-text" style="font-size: 1.1em;">{safe_text}</div>
+        <div style="padding: 18px; border-radius: 10px; background-color: #1e1e2e; border: 1px solid #45475a; margin-top: 10px;">
+            <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 1.1em;">Result:</div>
+            <div style="font-size: 1.2em; color: #cdd6f4; font-weight: 500; line-height: 1.5;">{safe_text}</div>
         </div>
         """,
         unsafe_allow_html=True,
