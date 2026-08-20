@@ -308,13 +308,13 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
 # ============================
 # 🎚️ AUDIO PROCESSING CONFIGS
 # ============================
-MIN_RMS_ENERGY = 15.0  # Smooth threshold for background music/soft vocals
+MIN_RMS_ENERGY = 10.0
 MIN_DURATION_SECONDS = 0.20
 MAX_DURATION_SECONDS = 180
 VAD_FRAME_MS = 30
 MIN_SPEECH_SECONDS = 0.10
 NOISE_FLOOR_PERCENTILE = 10
-SPEECH_ABOVE_NOISE_FACTOR = 1.3
+SPEECH_ABOVE_NOISE_FACTOR = 1.1
 SPEECH_LOW_HZ = 50
 SPEECH_HIGH_HZ = 8000
 
@@ -551,7 +551,7 @@ audio_output = mic_recorder(
 )
 
 # ============================
-# 🧠 TRANSCRIPTION LOGIC
+# 🧠 TRANSCRIPTION LOGIC (FIXED — Confidence Check)
 # ============================
 if audio_output:
     audio_bytes = audio_output.get("bytes")
@@ -607,12 +607,16 @@ if audio_output:
                     if event_tags:
                         text_from_voice = f"{text_from_voice} {event_tags}".strip()
 
-                if text_from_voice:
+                # 🔥 FIX: Confidence check — 0.50 se neeche text mat dikhao
+                if text_from_voice and confidence >= 0.50:
                     st.session_state.last_transcription = text_from_voice
                     st.session_state.last_confidence = confidence
                     st.success("✅ Complete!")
+                elif text_from_voice and confidence < 0.50:
+                    st.warning("⚠️ Low confidence transcription. Please speak clearly.")
+                    st.session_state.last_transcription = ""
                 else:
-                    st.warning("⚠️ No clear speech returned by the model.")
+                    st.warning("⚠️ No clear speech detected.")
 
             except Exception as e:
                 st.error(f"❌ Transcription error: {e}")
