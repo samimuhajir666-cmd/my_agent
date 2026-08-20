@@ -564,11 +564,7 @@ def transcribe_with_whisper(
             .audio
             .transcriptions
             .create(
-                file=(
-                    audio_file.name,
-                    audio_file.read(),
-                    "audio/wav",
-                ),
+                file=("input_speech.wav", audio_file.read(), "audio/wav"),
                 model=STT_MODEL,
 
                 # DO NOT force English here.
@@ -581,7 +577,7 @@ def transcribe_with_whisper(
                     "segment"
                 ],
 
-                temperature=0.4,
+                temperature=0.2,
 
                 # Context only.
                 # We do NOT tell Whisper to "convert" or "translate".
