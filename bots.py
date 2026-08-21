@@ -37,7 +37,7 @@ if not DEEPGRAM_API_KEY:
 
 
 # ============================
-# 🎙️ DEEPGRAM CONFIGURATION (Urdu + English support)
+# 🎙️ DEEPGRAM CONFIGURATION
 # ============================
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 DEEPGRAM_MODEL = "nova-3"
@@ -56,7 +56,7 @@ DEEPGRAM_KEYTERMS = [
 
 
 # ============================
-# 🧹 ROMAN URDU TRANSLITERATION FUNCTION (FIXED)
+# 🧹 ROMAN URDU TRANSLITERATION
 # ============================
 def force_roman_script(text):
     """Convert Deepgram ISO-15919 transliteration to clean Roman Urdu."""
@@ -112,24 +112,16 @@ def force_roman_script(text):
     for word, repl in replacements.items():
         text = text.replace(word, repl)
 
-    # Cleanup multiple spaces and trim
     text = re.sub(r"\s+", " ", text).strip()
-    
-    # Remove any remaining non-Roman characters
     text = re.sub(r"[^a-zA-Z0-9 .,'?!]", "", text)
-    
     return text
 
 
 def clean_text(text):
-    """Basic cleanup for extra spaces and unwanted symbols."""
+    """Basic cleanup + roman transliteration."""
     if not text:
         return ""
-    
-    # First apply roman transliteration
     text = force_roman_script(text)
-    
-    # Then do basic cleanup
     text = re.sub(r"['''`\^\~]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -213,18 +205,16 @@ def detect_sound_events(audio_data, sample_rate):
 
 
 # ============================
-# 🎙️ DEEPGRAM TRANSCRIBE (FIXED — Urdu + English support)
+# 🎙️ DEEPGRAM TRANSCRIBE (FIXED — No callback, no forced language)
 # ============================
 def transcribe_with_deepgram(processed_bytes, debug=False):
-    # 🔥 FIX: "language" parameter hata diya — Deepgram ko detect karne do
     params = [
         ("model", DEEPGRAM_MODEL),
-        ("detect_language", "true"),  # Auto-detect Urdu, English, mixed
+        ("detect_language", "true"),
         ("smart_format", "true"),
         ("punctuate", "true"),
         ("utterances", "true"),
         ("numerals", "true"),
-        ("callback", "false"),
     ]
 
     for term in DEEPGRAM_KEYTERMS:
@@ -289,7 +279,7 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
             if confidences:
                 confidence = float(np.mean(confidences))
 
-    # 🔥 Apply roman transliteration to transcript
+    # Apply roman transliteration
     cleaned_transcript = clean_text(transcript)
 
     return {
@@ -300,7 +290,7 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
 
 
 # ============================
-# 🎚️ AUDIO PROCESSING CONFIGS
+# 🎚️ AUDIO PROCESSING
 # ============================
 MIN_RMS_ENERGY = 5.0
 MIN_DURATION_SECONDS = 0.20
@@ -336,7 +326,6 @@ def process_audio_buffer(audio_bytes, enhance_audio=False, debug=False):
             audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
             duration = len(audio_data) / float(sample_rate)
 
-        # Basic audio normalization for clearer audio detection
         processed_audio = normalize_audio(audio_data)
         processed_audio = np.clip(processed_audio, -32768, 32767).astype(np.int16)
 
