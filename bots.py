@@ -56,7 +56,7 @@ DEEPGRAM_KEYTERMS = [
 
 
 # ============================
-# 🧹 ROMAN URDU TRANSLITERATION
+# 🧹 ROMAN URDU TRANSLITERATION (FULLY IMPROVED)
 # ============================
 def force_roman_script(text):
     """Convert Deepgram ISO-15919 transliteration to clean Roman Urdu."""
@@ -112,8 +112,12 @@ def force_roman_script(text):
     for word, repl in replacements.items():
         text = text.replace(word, repl)
 
+    # Cleanup multiple spaces and trim
     text = re.sub(r"\s+", " ", text).strip()
+    
+    # Remove any remaining non-Roman characters
     text = re.sub(r"[^a-zA-Z0-9 .,'?!]", "", text)
+    
     return text
 
 
@@ -205,12 +209,12 @@ def detect_sound_events(audio_data, sample_rate):
 
 
 # ============================
-# 🎙️ DEEPGRAM TRANSCRIBE (FIXED — No callback, no forced language)
+# 🎙️ DEEPGRAM TRANSCRIBE (FIXED)
 # ============================
 def transcribe_with_deepgram(processed_bytes, debug=False):
     params = [
         ("model", DEEPGRAM_MODEL),
-        ("detect_language", "true"),
+        ("language", "ur"),           # 👈 Urdu force
         ("smart_format", "true"),
         ("punctuate", "true"),
         ("utterances", "true"),
