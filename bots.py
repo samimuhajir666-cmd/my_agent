@@ -85,23 +85,199 @@ DEEPGRAM_KEYTERMS = [
 
 
 # ============================
+# 🧹 URDU TO ROMAN MAPPING TABLE (COMPREHENSIVE)
+# ============================
+URDU_ROMAN_MAPPING = {
+    # Common Greetings
+    'السلام': 'Assalam',
+    'السلام علیکم': 'Assalam alaikum',
+    'وعليكم السلام': 'Wa alaikum assalam',
+    'السلام عليكم ورحمة الله وبركاته': 'Assalam alaikum wa rahmatullahi wa barakatuh',
+    'ہیلو': 'Hello',
+    'سلام': 'Salam',
+    'نمسکار': 'Namaskaar',
+    
+    # Common Phrases
+    'آپ کیسے ہیں': 'Aap kaise hain',
+    'آپ کیسے ہو': 'Aap kaise ho',
+    'آپ ٹھیک ہیں': 'Aap theek hain',
+    'میں ٹھیک ہوں': 'Main theek hun',
+    'شکریہ': 'Shukriya',
+    'شکریہ بہت': 'Shukriya bohat',
+    'خدا حافظ': 'Khuda hafiz',
+    'الوداع': 'Alvida',
+    'خیر ہے': 'Khair hai',
+    'بہت اچھا': 'Bohat achha',
+    'ٹھیک ہے': 'Theek hai',
+    'جی': 'Haan',
+    'جی ہاں': 'Haan',
+    'نہیں': 'Nahi',
+    'نیا': 'Naya',
+    'پرانا': 'Purana',
+    'بڑا': 'Bada',
+    'چھوٹا': 'Chhota',
+    'بہتر': 'Behtar',
+    'برا': 'Bura',
+    'اچھا': 'Achha',
+    'بہت اچھا': 'Bohat achha',
+    'برا': 'Bura',
+    'سخت': 'Sakht',
+    'آسان': 'Aasaan',
+    'مشکل': 'Mushkil',
+    
+    # Days & Time (Urdu)
+    'پیر': 'Monday',
+    'منگل': 'Tuesday',
+    'بدھ': 'Wednesday',
+    'جمعرات': 'Thursday',
+    'جمعہ': 'Friday',
+    'ہفتہ': 'Saturday',
+    'اتوار': 'Sunday',
+    
+    # Numbers (Urdu)
+    'ایک': 'Ek',
+    'دو': 'Do',
+    'تین': 'Teen',
+    'چار': 'Char',
+    'پانچ': 'Panch',
+    'چھ': 'Chhay',
+    'سات': 'Saat',
+    'آٹھ': 'Ath',
+    'نو': 'Nau',
+    'دس': 'Das',
+    
+    # Common Words
+    'کیا': 'Kya',
+    'کہاں': 'Kahan',
+    'کب': 'Kab',
+    'کون': 'Kaun',
+    'کیوں': 'Kyon',
+    'کیسے': 'Kaise',
+    'کتنا': 'Kitna',
+    'یہ': 'Yeh',
+    'وہ': 'Woh',
+    'ہم': 'Ham',
+    'آپ': 'Aap',
+    'میں': 'Main',
+    'آپ': 'Aap',
+    'نام': 'Naam',
+    'گھر': 'Ghar',
+    'کام': 'Kaam',
+    'پانی': 'Pani',
+    'کھانا': 'Khana',
+    'پینا': 'Pina',
+    'سونا': 'Sona',
+    'جاگنا': 'Uthna',
+    'چلنا': 'Chalna',
+    'دوڑنا': 'Dorna',
+    'بیٹھنا': 'Baithna',
+    'سنا': 'Suna',
+    'دیکھا': 'Dekha',
+    'بولا': 'Bola',
+    'سوال': 'Sawal',
+    'جواب': 'Jawab',
+    'خوشی': 'Khushi',
+    'غمی': 'Ghami',
+    'پریشانی': 'Pareshani',
+    'خطرہ': 'Khatara',
+    'امید': 'Ummeed',
+    'اعتماد': 'Aetmaad',
+    
+    # Hindi Common Words
+    'नमस्ते': 'Namaste',
+    'धन्यवाद': 'Dhanyavaad',
+    'अलविदा': 'Alvida',
+    'हाँ': 'Haan',
+    'नहीं': 'Nahi',
+    'क्या': 'Kya',
+    'कहाँ': 'Kahan',
+    'कब': 'Kab',
+    'कौन': 'Kaun',
+    'कैसे': 'Kaise',
+    'क्यों': 'Kyon',
+    'मैं': 'Main',
+    'आप': 'Aap',
+    'हम': 'Ham',
+    'वह': 'Woh',
+    'यह': 'Yeh',
+    'नाम': 'Naam',
+    'घर': 'Ghar',
+    'काम': 'Kaam',
+    'पानी': 'Pani',
+    'खाना': 'Khana',
+    'पीना': 'Pina',
+    'सोना': 'Sona',
+    'चलना': 'Chalna',
+    'देखना': 'Dekhna',
+    'सुनना': 'Sunna',
+    'बोलना': 'Bolna',
+    'बहुत': 'Bohat',
+    'अच्छा': 'Achha',
+    'बुरा': 'Bura',
+    'बड़ा': 'Bada',
+    'छोटा': 'Chhota',
+    'नया': 'Naya',
+    'पुराना': 'Purana',
+    'आसान': 'Aasaan',
+    'मुश्किल': 'Mushkil',
+    'सही': 'Sahi',
+    'गलत': 'Galat',
+}
+
+
+# ============================
 # 🧹 CLEAN & TRANSLITERATE FUNCTIONS
 # ============================
 def clean_text(text):
     """Basic cleanup for extra spaces and unwanted symbols."""
     if not text:
         return ""
-    text = re.sub(r"[’'‘`\^\~]", "", text)
+    text = re.sub(r"['''`\^\~]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def convert_to_roman_script(text):
-    """Converts Urdu Perso-Arabic script into clean Roman Urdu + English."""
+    """
+    Converts Urdu/Hindi Perso-Arabic script to Roman Script.
+    
+    STRATEGY:
+    1. Try exact match in mapping table (FAST)
+    2. Try word-by-word conversion (MEDIUM)
+    3. Fall back to Groq AI (SLOW but ACCURATE)
+    """
     if not text or not text.strip():
         return ""
 
+    # STRATEGY 1: EXACT MATCH
+    text_stripped = text.strip()
+    if text_stripped in URDU_ROMAN_MAPPING:
+        return URDU_ROMAN_MAPPING[text_stripped]
+
+    # STRATEGY 2: WORD-BY-WORD CONVERSION
+    words = text_stripped.split()
+    roman_words = []
+    
+    for word in words:
+        word_clean = word.strip()
+        if word_clean in URDU_ROMAN_MAPPING:
+            roman_words.append(URDU_ROMAN_MAPPING[word_clean])
+        else:
+            roman_words.append(word_clean)
+    
+    roman_text = " ".join(roman_words)
+    
+    # STRATEGY 3: CHECK IF CONVERSION WORKED (Has Urdu/Hindi script?)
+    has_urdu_script = bool(re.search(r'[\u0600-\u06FF]', roman_text))
+    has_hindi_script = bool(re.search(r'[\u0900-\u097F]', roman_text))
+    
+    if not has_urdu_script and not has_hindi_script:
+        # Conversion successful!
+        return roman_text.strip()
+    
+    # STRATEGY 4: FALLBACK TO GROQ AI (if mapping didn't work)
     if not GROQ_API_KEY:
-        return text  # Fallback to original text if GROQ key is missing
+        # If no Groq key, return best effort
+        return roman_text.strip()
 
     try:
         client = Groq(api_key=GROQ_API_KEY)
@@ -113,9 +289,9 @@ def convert_to_roman_script(text):
                     "content": (
                         "You are a professional audio transcript converter. "
                         "Convert Urdu/Hindi text into clean ROMAN URDU script (e.g., 'Aap kaise hain'). "
-                        "Keep any English words as standard English text (e.g., 'review', 'team', 'pitch'). "
-                        "STRICT RULE: Output ONLY the converted text. Do NOT use Urdu script or Devanagari Hindi script. "
-                        "Do not add explanations, notes, or intros."
+                        "Keep any English words as standard English text. "
+                        "STRICT RULE: Output ONLY the converted text. No Urdu script, no Hindi script. "
+                        "No explanations, notes, or intros."
                     ),
                 },
                 {"role": "user", "content": text},
@@ -123,12 +299,15 @@ def convert_to_roman_script(text):
             temperature=0.1,
             max_tokens=1000,
         )
+        
         converted = response.choices[0].message.content.strip()
-        # Fallback regex safety net to purge remaining Urdu script characters
+        # Safety net: remove any remaining script characters
         converted = re.sub(r"[\u0600-\u06FF\u0900-\u097F]", "", converted)
         return converted.strip()
+    
     except Exception:
-        return text
+        # If Groq fails, return word-by-word result
+        return roman_text.strip()
 
 
 # ============================
@@ -318,7 +497,7 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
             if confidences:
                 confidence = float(np.mean(confidences))
 
-    # Convert Urdu Perso-Arabic text to Roman Urdu / English
+    # ✨ CONVERT URDU SCRIPT TO ROMAN SCRIPT ✨
     roman_text = convert_to_roman_script(transcript)
 
     return {
@@ -524,11 +703,11 @@ if "last_sample_rate" not in st.session_state:
 # ============================
 load_css("style.css")
 load_html("index.html")
-st.title("🎤 SPEECH TO TEXT")
-st.caption("Deepgram Nova-3 + Groq Transliteration")
+st.title("🎤 SPEECH TO TEXT - ROMAN SCRIPT")
+st.caption("Deepgram Nova-3 + Intelligent Roman Transliteration")
 
 st.info(
-    "Record your voice or play audio. Keep Light audio enhancement OFF for songs/music."
+    "🎤 Record your Urdu/Hindi speech. Output will be in Roman script. Keep audio enhancement OFF for songs/music."
 )
 
 # ============================
@@ -553,7 +732,7 @@ bg_sensitivity = 0.35
 # ============================
 # 🐞 DEBUG & SOUND EVENTS
 # ============================
-debug_mode = st.checkbox("🐞 Show real technical errors", value=False)
+debug_mode = st.checkbox("🐞 Show technical errors", value=False)
 detect_events = st.checkbox(
     "😮 Detect sound events (laughter/breathing)", value=False
 )
@@ -562,7 +741,7 @@ detect_events = st.checkbox(
 # 🎤 MICROPHONE INPUT
 # ============================
 st.subheader("🎤 Voice Input")
-st.write("Press Start, speak or play audio, then press Stop.")
+st.write("Press Start, speak in Urdu/Hindi, then press Stop.")
 
 audio_output = mic_recorder(
     start_prompt="🎤 Click to Start Recording",
@@ -617,7 +796,7 @@ if audio_output:
             with st.spinner("😮 Detecting non-speech sounds..."):
                 events = detect_sound_events(raw_audio, sample_rate)
 
-        with st.spinner("⚡ Transcribing & Converting to Roman Script..."):
+        with st.spinner("⚡ Transcribing to Roman Script..."):
             try:
                 transcription_result = transcribe_with_deepgram(
                     processed_bytes, debug=debug_mode
@@ -647,16 +826,16 @@ if audio_output:
                     st.exception(e)
 
 # ============================
-# 📝 DISPLAY OUTPUT
+# 📝 DISPLAY OUTPUT (ROMAN SCRIPT)
 # ============================
 st.divider()
-st.subheader("📝 Transcribed Text")
+st.subheader("📝 Transcribed Text (Roman Script)")
 if st.session_state.last_transcription:
     safe_text = html.escape(st.session_state.last_transcription)
     st.markdown(
         f"""
         <div style="padding: 18px; border-radius: 10px; background-color: #1e1e2e; border: 1px solid #45475a; margin-top: 10px;">
-            <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 1.1em;">Result:</div>
+            <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 1.1em;">✅ Roman Result:</div>
             <div style="font-size: 1.2em; color: #cdd6f4; font-weight: 500; line-height: 1.5;">{safe_text}</div>
         </div>
         """,
@@ -664,11 +843,12 @@ if st.session_state.last_transcription:
     )
 
     if st.session_state.last_confidence is not None:
+        confidence_pct = st.session_state.last_confidence * 100
         st.caption(
-            f"Deepgram confidence score: {st.session_state.last_confidence:.2f}"
+            f"📊 Deepgram Confidence: {confidence_pct:.1f}%"
         )
 else:
-    st.info("Your transcription will appear here.")
+    st.info("Your Roman transcription will appear here.")
 
 # ============================
 # 🛠️ CONTROLS
@@ -676,14 +856,27 @@ else:
 st.divider()
 col1, col2 = st.columns(2)
 with col1:
-    if st.button("🛑 Lock Text", use_container_width=True):
+    if st.button("🔒 Lock Text", use_container_width=True):
         if st.session_state.last_transcription:
-            st.success("Text saved in current session.")
+            st.success("✅ Text locked in session.")
         else:
-            st.warning("No text available to save.")
+            st.warning("⚠️ No text available to lock.")
 with col2:
-    if st.button("🗑️ Clear Text", use_container_width=True):
+    if st.button("🗑️ Clear All", use_container_width=True):
         st.session_state.last_transcription = ""
         st.session_state.last_confidence = None
         st.session_state.last_audio_bytes = None
         st.rerun()
+
+# ============================
+# ℹ️ INFO SECTION
+# ============================
+st.divider()
+st.info(
+    "🌍 Transcription Features:\n"
+    "✅ Automatic Roman conversion (Urdu/Hindi → Roman)\n"
+    "✅ Sound event detection (laughter, coughing, etc.)\n"
+    "✅ Confidence scoring\n"
+    "✅ Audio enhancement options\n"
+    "📌 Best results: Speak clearly, minimize background noise"
+)
