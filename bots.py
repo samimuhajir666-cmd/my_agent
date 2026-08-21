@@ -8,6 +8,7 @@ import scipy.io.wavfile as wav
 import scipy.signal as signal
 import streamlit as st
 from dotenv import load_dotenv
+from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
 # ============================
@@ -24,12 +25,19 @@ load_dotenv()
 # 🔑 API KEYS CONFIGURATION
 # ============================
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not DEEPGRAM_API_KEY:
     try:
         DEEPGRAM_API_KEY = st.secrets.get("DEEPGRAM_API_KEY")
     except Exception:
         DEEPGRAM_API_KEY = None
+
+if not GROQ_API_KEY:
+    try:
+        GROQ_API_KEY = st.secrets.get("GROQ_API_KEY")
+    except Exception:
+        GROQ_API_KEY = None
 
 if not DEEPGRAM_API_KEY:
     st.error("DEEPGRAM_API_KEY not found. Put it in .env or Streamlit Secrets.")
@@ -41,7 +49,7 @@ if not DEEPGRAM_API_KEY:
 # ============================
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 DEEPGRAM_MODEL = "nova-3"
-DEEPGRAM_LANGUAGE = "ur"  # Explicitly Urdu for accurate speech recognition
+DEEPGRAM_LANGUAGE = "ur"  # Deepgram listens in Urdu script for maximum accuracy
 DEEPGRAM_TIMEOUT = 60
 DEEPGRAM_CONFIDENCE_THRESHOLD = 0.35
 
@@ -77,7 +85,7 @@ DEEPGRAM_KEYTERMS = [
 
 
 # ============================
-# 🧹 CLEAN SCRIPT FUNCTION
+# 🧹 CLEAN & TRANSLITERATE FUNCTIONS
 # ============================
 def clean_text(text):
     """Basic cleanup for extra spaces and unwanted symbols."""
@@ -85,6 +93,42 @@ def clean_text(text):
         return ""
     text = re.sub(r"[’'‘`\^\~]", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def convert_to_roman_script(text):
+    """Converts Urdu Perso-Arabic script into clean Roman Urdu + English."""
+    if not text or not text.strip():
+        return ""
+
+    if not GROQ_API_KEY:
+        return text  # Fallback to original text if GROQ key is missing
+
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a professional audio transcript converter. "
+                        "Convert Urdu/Hindi text into clean ROMAN URDU script (e.g., 'Aap kaise hain'). "
+                        "Keep any English words as standard English text (e.g., 'review', 'team', 'pitch'). "
+                        "STRICT RULE: Output ONLY the converted text. Do NOT use Urdu script or Devanagari Hindi script. "
+                        "Do not add explanations, notes, or intros."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.1,
+            max_tokens=1000,
+        )
+        converted = response.choices[0].message.content.strip()
+        # Fallback regex safety net to purge remaining Urdu script characters
+        converted = re.sub(r"[\u0600-\u06FF\u0900-\u097F]", "", converted)
+        return converted.strip()
+    except Exception:
+        return text
 
 
 # ============================
@@ -198,7 +242,7 @@ def detect_sound_events(audio_data, sample_rate):
 
 
 # ============================
-# 🎙️ DEEPGRAM TRANSCRIBE (ONLY DEEPGRAM)
+# 🎙️ DEEPGRAM + GROQ TRANSCRIBE
 # ============================
 def transcribe_with_deepgram(processed_bytes, debug=False):
     params = [
@@ -274,8 +318,11 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
             if confidences:
                 confidence = float(np.mean(confidences))
 
+    # Convert Urdu Perso-Arabic text to Roman Urdu / English
+    roman_text = convert_to_roman_script(transcript)
+
     return {
-        "text": clean_text(transcript),
+        "text": clean_text(roman_text),
         "confidence": confidence,
         "raw": data,
     }
@@ -478,7 +525,7 @@ if "last_sample_rate" not in st.session_state:
 load_css("style.css")
 load_html("index.html")
 st.title("🎤 SPEECH TO TEXT")
-st.caption("Deepgram Nova-3 • Direct Speech Processing")
+st.caption("Deepgram Nova-3 + Groq Transliteration")
 
 st.info(
     "Record your voice or play audio. Keep Light audio enhancement OFF for songs/music."
@@ -570,7 +617,7 @@ if audio_output:
             with st.spinner("😮 Detecting non-speech sounds..."):
                 events = detect_sound_events(raw_audio, sample_rate)
 
-        with st.spinner("⚡ Transcribing with Deepgram Nova-3..."):
+        with st.spinner("⚡ Transcribing & Converting to Roman Script..."):
             try:
                 transcription_result = transcribe_with_deepgram(
                     processed_bytes, debug=debug_mode
