@@ -8,14 +8,13 @@ import scipy.io.wavfile as wav
 import scipy.signal as signal
 import streamlit as st
 from dotenv import load_dotenv
-from groq import Groq
 from streamlit_mic_recorder import mic_recorder
 
 # ============================
 # 🖥️ STREAMLIT PAGE CONFIG
 # ============================
 st.set_page_config(
-    page_title="Speech to Text",
+    page_title="Speech to Text (Deepgram Only)",
     page_icon="🎤",
     layout="centered",
 )
@@ -25,7 +24,6 @@ load_dotenv()
 # 🔑 API KEYS CONFIGURATION
 # ============================
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not DEEPGRAM_API_KEY:
     try:
@@ -33,14 +31,8 @@ if not DEEPGRAM_API_KEY:
     except Exception:
         DEEPGRAM_API_KEY = None
 
-if not GROQ_API_KEY:
-    try:
-        GROQ_API_KEY = st.secrets.get("GROQ_API_KEY")
-    except Exception:
-        GROQ_API_KEY = None
-
 if not DEEPGRAM_API_KEY:
-    st.error("DEEPGRAM_API_KEY not found. Put it in .env or Streamlit Secrets.")
+    st.error("DEEPGRAM_API_KEY not found. Please set it in .env or Streamlit Secrets.")
     st.stop()
 
 
@@ -49,265 +41,30 @@ if not DEEPGRAM_API_KEY:
 # ============================
 DEEPGRAM_API_URL = "https://api.deepgram.com/v1/listen"
 DEEPGRAM_MODEL = "nova-3"
-DEEPGRAM_LANGUAGE = "ur"  # Deepgram listens in Urdu script for maximum accuracy
 DEEPGRAM_TIMEOUT = 60
-DEEPGRAM_CONFIDENCE_THRESHOLD = 0.35
 
+# Common technical and conversational terms for Deepgram boosting
 DEEPGRAM_KEYTERMS = [
-    "Python",
-    "Streamlit",
-    "Jupyter",
-    "Matplotlib",
-    "Plotly",
-    "NumPy",
-    "SciPy",
-    "Deepgram",
-    "AI",
-    "machine learning",
-    "deep learning",
-    "API",
-    "API key",
-    "variable",
-    "function",
-    "class",
-    "list",
-    "dictionary",
-    "tuple",
-    "integer",
-    "string",
-    "float",
-    "Flask",
-    "FastAPI",
-    "JavaScript",
-    "HTML",
-    "CSS",
+    "Python", "Streamlit", "Jupyter", "Matplotlib", "Plotly", "NumPy", "SciPy",
+    "Deepgram", "AI", "machine learning", "deep learning", "API", "API key",
+    "variable", "function", "class", "list", "dictionary", "tuple", "integer",
+    "string", "float", "Flask", "FastAPI", "JavaScript", "HTML", "CSS",
+    "aap", "kaise", "hain", "main", "theek", "hun", "kya", "kar", "rahe", "ho",
+    "shukriya", "haan", "nahi", "bhai", "sahi", "ho", "gaya"
 ]
 
 
 # ============================
-# 🧹 URDU TO ROMAN MAPPING TABLE (COMPREHENSIVE)
-# ============================
-URDU_ROMAN_MAPPING = {
-    # Common Greetings
-    'السلام': 'Assalam',
-    'السلام علیکم': 'Assalam alaikum',
-    'وعليكم السلام': 'Wa alaikum assalam',
-    'السلام عليكم ورحمة الله وبركاته': 'Assalam alaikum wa rahmatullahi wa barakatuh',
-    'ہیلو': 'Hello',
-    'سلام': 'Salam',
-    'نمسکار': 'Namaskaar',
-    
-    # Common Phrases
-    'آپ کیسے ہیں': 'Aap kaise hain',
-    'آپ کیسے ہو': 'Aap kaise ho',
-    'آپ ٹھیک ہیں': 'Aap theek hain',
-    'میں ٹھیک ہوں': 'Main theek hun',
-    'شکریہ': 'Shukriya',
-    'شکریہ بہت': 'Shukriya bohat',
-    'خدا حافظ': 'Khuda hafiz',
-    'الوداع': 'Alvida',
-    'خیر ہے': 'Khair hai',
-    'بہت اچھا': 'Bohat achha',
-    'ٹھیک ہے': 'Theek hai',
-    'جی': 'Haan',
-    'جی ہاں': 'Haan',
-    'نہیں': 'Nahi',
-    'نیا': 'Naya',
-    'پرانا': 'Purana',
-    'بڑا': 'Bada',
-    'چھوٹا': 'Chhota',
-    'بہتر': 'Behtar',
-    'برا': 'Bura',
-    'اچھا': 'Achha',
-    'بہت اچھا': 'Bohat achha',
-    'برا': 'Bura',
-    'سخت': 'Sakht',
-    'آسان': 'Aasaan',
-    'مشکل': 'Mushkil',
-    
-    # Days & Time (Urdu)
-    'پیر': 'Monday',
-    'منگل': 'Tuesday',
-    'بدھ': 'Wednesday',
-    'جمعرات': 'Thursday',
-    'جمعہ': 'Friday',
-    'ہفتہ': 'Saturday',
-    'اتوار': 'Sunday',
-    
-    # Numbers (Urdu)
-    'ایک': 'Ek',
-    'دو': 'Do',
-    'تین': 'Teen',
-    'چار': 'Char',
-    'پانچ': 'Panch',
-    'چھ': 'Chhay',
-    'سات': 'Saat',
-    'آٹھ': 'Ath',
-    'نو': 'Nau',
-    'دس': 'Das',
-    
-    # Common Words
-    'کیا': 'Kya',
-    'کہاں': 'Kahan',
-    'کب': 'Kab',
-    'کون': 'Kaun',
-    'کیوں': 'Kyon',
-    'کیسے': 'Kaise',
-    'کتنا': 'Kitna',
-    'یہ': 'Yeh',
-    'وہ': 'Woh',
-    'ہم': 'Ham',
-    'آپ': 'Aap',
-    'میں': 'Main',
-    'آپ': 'Aap',
-    'نام': 'Naam',
-    'گھر': 'Ghar',
-    'کام': 'Kaam',
-    'پانی': 'Pani',
-    'کھانا': 'Khana',
-    'پینا': 'Pina',
-    'سونا': 'Sona',
-    'جاگنا': 'Uthna',
-    'چلنا': 'Chalna',
-    'دوڑنا': 'Dorna',
-    'بیٹھنا': 'Baithna',
-    'سنا': 'Suna',
-    'دیکھا': 'Dekha',
-    'بولا': 'Bola',
-    'سوال': 'Sawal',
-    'جواب': 'Jawab',
-    'خوشی': 'Khushi',
-    'غمی': 'Ghami',
-    'پریشانی': 'Pareshani',
-    'خطرہ': 'Khatara',
-    'امید': 'Ummeed',
-    'اعتماد': 'Aetmaad',
-    
-    # Hindi Common Words
-    'नमस्ते': 'Namaste',
-    'धन्यवाद': 'Dhanyavaad',
-    'अलविदा': 'Alvida',
-    'हाँ': 'Haan',
-    'नहीं': 'Nahi',
-    'क्या': 'Kya',
-    'कहाँ': 'Kahan',
-    'कब': 'Kab',
-    'कौन': 'Kaun',
-    'कैसे': 'Kaise',
-    'क्यों': 'Kyon',
-    'मैं': 'Main',
-    'आप': 'Aap',
-    'हम': 'Ham',
-    'वह': 'Woh',
-    'यह': 'Yeh',
-    'नाम': 'Naam',
-    'घर': 'Ghar',
-    'काम': 'Kaam',
-    'पानी': 'Pani',
-    'खाना': 'Khana',
-    'पीना': 'Pina',
-    'सोना': 'Sona',
-    'चलना': 'Chalna',
-    'देखना': 'Dekhna',
-    'सुनना': 'Sunna',
-    'बोलना': 'Bolna',
-    'बहुत': 'Bohat',
-    'अच्छा': 'Achha',
-    'बुरा': 'Bura',
-    'बड़ा': 'Bada',
-    'छोटा': 'Chhota',
-    'नया': 'Naya',
-    'पुराना': 'Purana',
-    'आसान': 'Aasaan',
-    'मुश्किल': 'Mushkil',
-    'सही': 'Sahi',
-    'गलत': 'Galat',
-}
-
-
-# ============================
-# 🧹 CLEAN & TRANSLITERATE FUNCTIONS
+# 🧹 CLEAN TEXT FUNCTION
 # ============================
 def clean_text(text):
     """Basic cleanup for extra spaces and unwanted symbols."""
     if not text:
         return ""
     text = re.sub(r"['''`\^\~]", "", text)
+    # Ensure any stray non-latin characters are filtered out
+    text = re.sub(r"[\u0600-\u06FF\u0900-\u097F]", "", text)
     return re.sub(r"\s+", " ", text).strip()
-
-
-def convert_to_roman_script(text):
-    """
-    Converts Urdu/Hindi Perso-Arabic script to Roman Script.
-    
-    STRATEGY:
-    1. Try exact match in mapping table (FAST)
-    2. Try word-by-word conversion (MEDIUM)
-    3. Fall back to Groq AI (SLOW but ACCURATE)
-    """
-    if not text or not text.strip():
-        return ""
-
-    # STRATEGY 1: EXACT MATCH
-    text_stripped = text.strip()
-    if text_stripped in URDU_ROMAN_MAPPING:
-        return URDU_ROMAN_MAPPING[text_stripped]
-
-    # STRATEGY 2: WORD-BY-WORD CONVERSION
-    words = text_stripped.split()
-    roman_words = []
-    
-    for word in words:
-        word_clean = word.strip()
-        if word_clean in URDU_ROMAN_MAPPING:
-            roman_words.append(URDU_ROMAN_MAPPING[word_clean])
-        else:
-            roman_words.append(word_clean)
-    
-    roman_text = " ".join(roman_words)
-    
-    # STRATEGY 3: CHECK IF CONVERSION WORKED (Has Urdu/Hindi script?)
-    has_urdu_script = bool(re.search(r'[\u0600-\u06FF]', roman_text))
-    has_hindi_script = bool(re.search(r'[\u0900-\u097F]', roman_text))
-    
-    if not has_urdu_script and not has_hindi_script:
-        # Conversion successful!
-        return roman_text.strip()
-    
-    # STRATEGY 4: FALLBACK TO GROQ AI (if mapping didn't work)
-    if not GROQ_API_KEY:
-        # If no Groq key, return best effort
-        return roman_text.strip()
-
-    try:
-        client = Groq(api_key=GROQ_API_KEY)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional audio transcript converter. "
-                        "Convert Urdu/Hindi text into clean ROMAN URDU script (e.g., 'Aap kaise hain'). "
-                        "Keep any English words as standard English text. "
-                        "STRICT RULE: Output ONLY the converted text. No Urdu script, no Hindi script. "
-                        "No explanations, notes, or intros."
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            temperature=0.1,
-            max_tokens=1000,
-        )
-        
-        converted = response.choices[0].message.content.strip()
-        # Safety net: remove any remaining script characters
-        converted = re.sub(r"[\u0600-\u06FF\u0900-\u097F]", "", converted)
-        return converted.strip()
-    
-    except Exception:
-        # If Groq fails, return word-by-word result
-        return roman_text.strip()
 
 
 # ============================
@@ -316,29 +73,14 @@ def convert_to_roman_script(text):
 EVENT_LABEL_MAP = {
     "cough": "[coughing]",
     "laughter": "[laughing]",
-    "baby laughter": "[laughing]",
-    "giggle": "[laughing]",
-    "snicker": "[laughing]",
-    "belly laugh": "[laughing]",
-    "chuckle, chortle": "[laughing]",
     "crying, sobbing": "[crying]",
-    "baby cry, infant cry": "[crying]",
-    "whimper": "[crying]",
     "screaming": "[screaming]",
     "clapping": "[clapping]",
-    "applause": "[clapping]",
     "sneeze": "[sneezing]",
     "sigh": "[sighing]",
-    "sniff": "[sniffing]",
-    "throat clearing": "[clearing throat]",
-    "whistling": "[whistling]",
     "breathing": "[breathing]",
-    "wheeze": "[breathing]",
-    "gasp": "[breathing]",
 }
 EVENT_CONFIDENCE_THRESHOLD = 0.20
-BREATHING_CONFIDENCE_THRESHOLD = 0.12
-BREATHING_LABELS = {"breathing", "wheeze", "gasp"}
 EVENT_WINDOW_SECONDS = 1.5
 PANNS_SAMPLE_RATE = 32000
 
@@ -347,7 +89,6 @@ PANNS_SAMPLE_RATE = 32000
 def load_sound_event_model():
     try:
         from panns_inference import AudioTagging
-
         return AudioTagging(checkpoint_path=None, device="cpu")
     except Exception:
         return None
@@ -386,31 +127,15 @@ def detect_sound_events(audio_data, sample_rate):
 
             for idx, prob in enumerate(probs):
                 label_name = audioset_labels[idx].strip().lower()
-                if label_name not in EVENT_LABEL_MAP:
-                    continue
-
-                threshold = (
-                    BREATHING_CONFIDENCE_THRESHOLD
-                    if label_name in BREATHING_LABELS
-                    else EVENT_CONFIDENCE_THRESHOLD
-                )
-                if prob < threshold:
-                    continue
-
-                start_sec = start_sample / PANNS_SAMPLE_RATE
-                end_sec = end_sample / PANNS_SAMPLE_RATE
-                raw_events.append(
-                    (start_sec, end_sec, EVENT_LABEL_MAP[label_name])
-                )
+                if label_name in EVENT_LABEL_MAP and prob >= EVENT_CONFIDENCE_THRESHOLD:
+                    start_sec = start_sample / PANNS_SAMPLE_RATE
+                    end_sec = end_sample / PANNS_SAMPLE_RATE
+                    raw_events.append((start_sec, end_sec, EVENT_LABEL_MAP[label_name]))
 
         raw_events.sort(key=lambda e: e[0])
         merged = []
         for start_sec, end_sec, tag in raw_events:
-            if (
-                merged
-                and merged[-1][2] == tag
-                and start_sec <= merged[-1][1] + 0.1
-            ):
+            if merged and merged[-1][2] == tag and start_sec <= merged[-1][1] + 0.1:
                 merged[-1] = (merged[-1][0], end_sec, tag)
             else:
                 merged.append((start_sec, end_sec, tag))
@@ -421,12 +146,14 @@ def detect_sound_events(audio_data, sample_rate):
 
 
 # ============================
-# 🎙️ DEEPGRAM + GROQ TRANSCRIBE
+# 🎙️ DEEPGRAM TRANSCRIBE (ONLY DEEPGRAM)
 # ============================
 def transcribe_with_deepgram(processed_bytes, debug=False):
+    # Setting model to nova-3 with English/Multi-script detection to output Roman/Latin text directly
     params = [
         ("model", DEEPGRAM_MODEL),
-        ("language", DEEPGRAM_LANGUAGE),
+        ("language", "en"),  # English/Latin alphabet mode outputs Roman Script directly
+        ("detect_language", "true"),
         ("smart_format", "true"),
         ("punctuate", "true"),
         ("utterances", "true"),
@@ -456,9 +183,7 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
 
     if response.status_code != 200:
         detail = response.text[:1200]
-        raise RuntimeError(
-            f"Deepgram API error {response.status_code}: {detail}"
-        )
+        raise RuntimeError(f"Deepgram API error {response.status_code}: {detail}")
 
     try:
         data = response.json()
@@ -497,11 +222,8 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
             if confidences:
                 confidence = float(np.mean(confidences))
 
-    # ✨ CONVERT URDU SCRIPT TO ROMAN SCRIPT ✨
-    roman_text = convert_to_roman_script(transcript)
-
     return {
-        "text": clean_text(roman_text),
+        "text": clean_text(transcript),
         "confidence": confidence,
         "raw": data,
     }
@@ -510,88 +232,20 @@ def transcribe_with_deepgram(processed_bytes, debug=False):
 # ============================
 # 🎚️ AUDIO PROCESSING CONFIGS
 # ============================
-MIN_RMS_ENERGY = 10.0
+MIN_RMS_ENERGY = 5.0
 MIN_DURATION_SECONDS = 0.20
 MAX_DURATION_SECONDS = 180
-VAD_FRAME_MS = 30
-MIN_SPEECH_SECONDS = 0.10
-NOISE_FLOOR_PERCENTILE = 10
-SPEECH_ABOVE_NOISE_FACTOR = 1.1
-SPEECH_LOW_HZ = 50
-SPEECH_HIGH_HZ = 8000
 
 
-def bandpass_filter(
-    audio_data, sample_rate, low_hz=SPEECH_LOW_HZ, high_hz=SPEECH_HIGH_HZ
-):
-    if len(audio_data) < 100:
-        return audio_data
-    nyquist = 0.5 * sample_rate
-    low = max(0.001, low_hz / nyquist)
-    high = min(0.99, high_hz / nyquist)
-
-    if low >= high:
-        return audio_data
-
-    try:
-        b, a = signal.butter(3, [low, high], btype="band")
-        return signal.filtfilt(b, a, audio_data.astype(np.float64))
-    except Exception:
-        return audio_data
-
-
-def normalize_audio(audio_data, target_peak=0.90):
+def normalize_audio(audio_data, target_peak=0.95):
     max_val = np.max(np.abs(audio_data))
     if max_val < 1e-8:
         return audio_data
-
     scale = target_peak * 32767.0 / max_val
     return audio_data * scale
 
 
-def frame_energies(audio_data, sample_rate, frame_ms=VAD_FRAME_MS):
-    frame_len = max(1, int(sample_rate * frame_ms / 1000))
-    energies = []
-
-    for start in range(0, len(audio_data), frame_len):
-        chunk = audio_data[start : start + frame_len]
-        if len(chunk) == 0:
-            continue
-        energies.append(
-            float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
-        )
-
-    return energies
-
-
-def contains_real_speech(audio_data, sample_rate):
-    if audio_data is None or len(audio_data) == 0:
-        return False
-
-    energies = frame_energies(audio_data, sample_rate)
-    if not energies:
-        return False
-
-    noise_floor = np.percentile(energies, NOISE_FLOOR_PERCENTILE)
-    dynamic_threshold = max(
-        noise_floor * SPEECH_ABOVE_NOISE_FACTOR, MIN_RMS_ENERGY
-    )
-
-    speech_frame_count = sum(
-        1 for energy in energies if energy > dynamic_threshold
-    )
-    speech_seconds = speech_frame_count * VAD_FRAME_MS / 1000.0
-
-    return speech_seconds >= MIN_SPEECH_SECONDS
-
-
-def process_audio_buffer(
-    audio_bytes,
-    enhance_audio=False,
-    suppress_background=False,
-    background_sensitivity=0.35,
-    debug=False,
-):
+def process_audio_buffer(audio_bytes, enhance_audio=False, debug=False):
     try:
         audio_file = io.BytesIO(audio_bytes)
         sample_rate, audio_data = wav.read(audio_file)
@@ -612,33 +266,9 @@ def process_audio_buffer(
             audio_data = audio_data[: int(MAX_DURATION_SECONDS * sample_rate)]
             duration = len(audio_data) / float(sample_rate)
 
-        if not contains_real_speech(audio_data, sample_rate):
-            return None
-
-        raw_mono_audio = audio_data.copy()
-        processed_audio = audio_data.copy()
-
-        if enhance_audio:
-            processed_audio = bandpass_filter(processed_audio, sample_rate)
-            try:
-                import noisereduce as nr
-
-                processed_audio = nr.reduce_noise(
-                    y=processed_audio,
-                    sr=sample_rate,
-                    stationary=False,
-                    prop_decrease=0.20,
-                )
-            except Exception:
-                pass
-            processed_audio = normalize_audio(processed_audio)
-
-        if not contains_real_speech(processed_audio, sample_rate):
-            processed_audio = raw_mono_audio.copy()
-
-        processed_audio = np.clip(processed_audio, -32768, 32767).astype(
-            np.int16
-        )
+        # Basic audio normalization for clearer audio detection
+        processed_audio = normalize_audio(audio_data)
+        processed_audio = np.clip(processed_audio, -32768, 32767).astype(np.int16)
 
         output_buffer = io.BytesIO()
         wav.write(output_buffer, sample_rate, processed_audio)
@@ -646,7 +276,7 @@ def process_audio_buffer(
 
         return {
             "processed_bytes": output_buffer.read(),
-            "raw_audio": raw_mono_audio,
+            "raw_audio": audio_data,
             "sample_rate": int(sample_rate),
             "duration": float(duration),
         }
@@ -664,9 +294,7 @@ def load_css(file_path="style.css"):
     if os.path.exists(file_path):
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                st.markdown(
-                    f"<style>{f.read()}</style>", unsafe_allow_html=True
-                )
+                st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
         except Exception:
             pass
 
@@ -691,57 +319,19 @@ if "last_transcription" not in st.session_state:
     st.session_state.last_transcription = ""
 if "last_confidence" not in st.session_state:
     st.session_state.last_confidence = None
-if "last_audio_bytes" not in st.session_state:
-    st.session_state.last_audio_bytes = None
-if "last_audio_duration" not in st.session_state:
-    st.session_state.last_audio_duration = None
-if "last_sample_rate" not in st.session_state:
-    st.session_state.last_sample_rate = None
 
 # ============================
 # 🧩 PAGE CONTENT
 # ============================
 load_css("style.css")
 load_html("index.html")
-st.title("🎤 SPEECH TO TEXT - ROMAN SCRIPT")
-st.caption("Deepgram Nova-3 + Intelligent Roman Transliteration")
-
-st.info(
-    "🎤 Record your Urdu/Hindi speech. Output will be in Roman script. Keep audio enhancement OFF for songs/music."
-)
-
-# ============================
-# 🎚️ AUDIO CONTROLS
-# ============================
-st.subheader("🎚️ Audio Controls")
-col_a, col_b = st.columns(2)
-with col_a:
-    enhance_audio = st.checkbox(
-        "✨ Light audio enhancement",
-        value=False,
-        help="Keep OFF for songs or speech with music.",
-    )
-with col_b:
-    suppress_background = st.checkbox(
-        "🔇 Reduce background noise",
-        value=False,
-    )
-
-bg_sensitivity = 0.35
-
-# ============================
-# 🐞 DEBUG & SOUND EVENTS
-# ============================
-debug_mode = st.checkbox("🐞 Show technical errors", value=False)
-detect_events = st.checkbox(
-    "😮 Detect sound events (laughter/breathing)", value=False
-)
+st.title("🎤 SPEECH TO TEXT (Deepgram Nova-3)")
 
 # ============================
 # 🎤 MICROPHONE INPUT
 # ============================
 st.subheader("🎤 Voice Input")
-st.write("Press Start, speak in Urdu/Hindi, then press Stop.")
+st.write("Press Start, speak clearly into the microphone, then press Stop.")
 
 audio_output = mic_recorder(
     start_prompt="🎤 Click to Start Recording",
@@ -752,6 +342,9 @@ audio_output = mic_recorder(
     key="listener_mic",
 )
 
+debug_mode = st.checkbox("🐞 Show Technical Errors", value=False)
+detect_events = st.checkbox("😮 Detect Sound Events (Laughter/Coughing)", value=False)
+
 # ============================
 # 🧠 TRANSCRIPTION LOGIC
 # ============================
@@ -761,42 +354,25 @@ if audio_output:
         st.error("No audio data received.")
         st.stop()
 
-    with st.spinner("⏳ Processing audio..."):
-        result = process_audio_buffer(
-            audio_bytes,
-            enhance_audio=enhance_audio,
-            suppress_background=suppress_background,
-            background_sensitivity=bg_sensitivity,
-            debug=debug_mode,
-        )
+    with st.spinner("⏳ Processing Audio..."):
+        result = process_audio_buffer(audio_bytes, debug=debug_mode)
 
     if result is None:
-        st.warning(
-            "⚠️ Audio too quiet or no clear speech detected. Try speaking closer to the mic."
-        )
+        st.warning("⚠️ Recording was too short or silent. Please try speaking again.")
     else:
         processed_bytes = result["processed_bytes"]
         raw_audio = result["raw_audio"]
         sample_rate = result["sample_rate"]
-        duration = result["duration"]
 
-        st.session_state.last_audio_bytes = processed_bytes
-        st.session_state.last_audio_duration = duration
-        st.session_state.last_sample_rate = sample_rate
-
-        with st.expander("🔧 Audio details"):
-            st.write(f"Duration: {duration:.2f} seconds")
-            st.write(f"Sample rate: {sample_rate} Hz")
-
-        with st.expander("🔊 Listen to recording"):
+        with st.expander("🔊 Listen to Recording"):
             st.audio(audio_bytes, format="audio/wav")
 
         events = []
         if detect_events:
-            with st.spinner("😮 Detecting non-speech sounds..."):
+            with st.spinner("😮 Checking sound events..."):
                 events = detect_sound_events(raw_audio, sample_rate)
 
-        with st.spinner("⚡ Transcribing to Roman Script..."):
+        with st.spinner("⚡ Transcribing with Deepgram Nova-3..."):
             try:
                 transcription_result = transcribe_with_deepgram(
                     processed_bytes, debug=debug_mode
@@ -809,16 +385,12 @@ if audio_output:
                     if event_tags:
                         text_from_voice = f"{text_from_voice} {event_tags}".strip()
 
-                if text_from_voice and confidence >= 0.35:
+                if text_from_voice:
                     st.session_state.last_transcription = text_from_voice
                     st.session_state.last_confidence = confidence
-                    st.success("✅ Complete!")
-                elif text_from_voice and confidence < 0.35:
-                    st.warning("⚠️ Low confidence transcription. Please speak clearly.")
-                    st.session_state.last_transcription = text_from_voice
-                    st.session_state.last_confidence = confidence
+                    st.success("✅ Done!")
                 else:
-                    st.warning("⚠️ No clear speech detected.")
+                    st.warning("⚠️ Could not recognize speech. Try speaking louder or closer to the mic.")
 
             except Exception as e:
                 st.error(f"❌ Transcription error: {e}")
@@ -826,16 +398,16 @@ if audio_output:
                     st.exception(e)
 
 # ============================
-# 📝 DISPLAY OUTPUT (ROMAN SCRIPT)
+# 📝 DISPLAY OUTPUT
 # ============================
 st.divider()
-st.subheader("📝 Transcribed Text (Roman Script)")
+st.subheader("📝 Transcribed Text (Roman/English)")
 if st.session_state.last_transcription:
     safe_text = html.escape(st.session_state.last_transcription)
     st.markdown(
         f"""
         <div style="padding: 18px; border-radius: 10px; background-color: #1e1e2e; border: 1px solid #45475a; margin-top: 10px;">
-            <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 1.1em;">✅ Roman Result:</div>
+            <div style="font-weight: bold; color: #89b4fa; margin-bottom: 8px; font-size: 1.1em;">Result:</div>
             <div style="font-size: 1.2em; color: #cdd6f4; font-weight: 500; line-height: 1.5;">{safe_text}</div>
         </div>
         """,
@@ -844,39 +416,15 @@ if st.session_state.last_transcription:
 
     if st.session_state.last_confidence is not None:
         confidence_pct = st.session_state.last_confidence * 100
-        st.caption(
-            f"📊 Deepgram Confidence: {confidence_pct:.1f}%"
-        )
+        st.caption(f"📊 Deepgram Confidence: {confidence_pct:.1f}%")
 else:
-    st.info("Your Roman transcription will appear here.")
+    st.info("Your transcription will appear here.")
 
 # ============================
 # 🛠️ CONTROLS
 # ============================
 st.divider()
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("🔒 Lock Text", use_container_width=True):
-        if st.session_state.last_transcription:
-            st.success("✅ Text locked in session.")
-        else:
-            st.warning("⚠️ No text available to lock.")
-with col2:
-    if st.button("🗑️ Clear All", use_container_width=True):
-        st.session_state.last_transcription = ""
-        st.session_state.last_confidence = None
-        st.session_state.last_audio_bytes = None
-        st.rerun()
-
-# ============================
-# ℹ️ INFO SECTION
-# ============================
-st.divider()
-st.info(
-    "🌍 Transcription Features:\n"
-    "✅ Automatic Roman conversion (Urdu/Hindi → Roman)\n"
-    "✅ Sound event detection (laughter, coughing, etc.)\n"
-    "✅ Confidence scoring\n"
-    "✅ Audio enhancement options\n"
-    "📌 Best results: Speak clearly, minimize background noise"
-)
+if st.button("🗑️ Clear Output", use_container_width=True):
+    st.session_state.last_transcription = ""
+    st.session_state.last_confidence = None
+    st.rerun()
